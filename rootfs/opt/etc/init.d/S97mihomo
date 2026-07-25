@@ -1,0 +1,100 @@
+#!/bin/sh
+# GrKa Keen - сервис mihomo (Entware / Keenetic)
+# Использование: S97mihomo start [force] | stop | restart | status
+# ENABLED=no отключает автозапуск; запуск из панели идёт с аргументом force.
+
+ENABLED=yes
+
+PATH="/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+. /opt/share/grka/scripts/common.sh
+
+CONF_DIR="/opt/etc/mihomo"
+LOG_DIR="/opt/var/log/grka"
+LOG="$LOG_DIR/mihomo.log"
+SCRIPTS="/opt/share/grka/scripts"
+
+is_running() {
+	pidof mihomo >/dev/null 2>&1
+}
+
+do_start() {
+	if [ "$ENABLED" != "yes" ] && [ "$1" != "force" ]; then
+		echo "mihomo: автозапуск отключён (ENABLED=no). Запуск вручную: $0 start force"
+		return 0
+	fi
+	if is_running; then
+		echo "mihomo уже запущен"
+		return 0
+	fi
+
+	local BIN
+	BIN="$(ensure_core)"
+	if [ -z "$BIN" ]; then
+		echo "Ядро mihomo не установлено — установите его через панель GrKa Keen (вкладка «Статус»)"
+		return 1
+	fi
+	if [ ! -f "$CONF_DIR/config.yaml" ]; then
+		echo "Конфигурация $CONF_DIR/config.yaml не найдена"
+		return 1
+	fi
+
+	mkdir -p "$LOG_DIR"
+	# ротация лога: при превышении ~1 МБ переносим в .old
+	if [ -f "$LOG" ] && [ "$(wc -c < "$LOG" 2>/dev/null || echo 0)" -gt 1048576 ]; then
+		mv "$LOG" "$LOG.old" 2>/dev/null
+	fi
+
+	ulimit -n 65536 2>/dev/null
+
+	echo "$(date '+%Y-%m-%d %H:%M:%S') [grka] запуск mihomo ($BIN)" >> "$LOG"
+	nohup setsid "$BIN" -d "$CONF_DIR" >> "$LOG" 2>&1 &
+
+	# ждём появления TUN и заворачиваем в него клиентов политики Keenetic
+	nohup setsid sh "$SCRIPTS/policy-route.sh" apply-wait >> "$LOG" 2>&1 &
+
+	echo "mihomo запущен"
+}
+
+do_stop() {
+	if ! is_running; then
+		echo "mihomo не запущен"
+	else
+		killall mihomo 2>/dev/null
+		local i=0
+		while is_running && [ $i -lt 10 ]; do
+			sleep 1
+			i=$((i + 1))
+		done
+		is_running && killall -9 mihomo 2>/dev/null
+		echo "mihomo остановлен"
+	fi
+	sh "$SCRIPTS/policy-route.sh" clear >> "$LOG" 2>/dev/null
+}
+
+case "$1" in
+start)
+	do_start "$2"
+	;;
+stop)
+	do_stop
+	;;
+restart)
+	do_stop
+	sleep 1
+	do_start force
+	;;
+status)
+	if is_running; then
+		echo "alive"
+		exit 0
+	else
+		echo "dead"
+		exit 1
+	fi
+	;;
+*)
+	echo "Использование: $0 start [force] | stop | restart | status"
+	exit 1
+	;;
+esac

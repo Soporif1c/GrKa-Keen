@@ -1,0 +1,85 @@
+# GrKa Keen — конфигурация mihomo по умолчанию (Keenetic)
+# Документация mihomo: https://wiki.metacubex.one/
+#
+# ВАЖНО: трафик заворачивается в mihomo только для клиентов политики Keenetic
+# (по умолчанию «GrKa») — этим управляет панель, поэтому auto-route выключен.
+
+mixed-port: 7890
+allow-lan: true
+bind-address: '*'
+mode: rule
+log-level: info
+ipv6: false
+
+# Clash API (для вкладки «Селекторы» и дашборда MetaCubeXD)
+external-controller: 0.0.0.0:9090
+external-ui: ui
+secret: ''
+
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+unified-delay: true
+tcp-concurrent: true
+
+# Сниффер определяет домен по SNI/Host — доменные правила работают,
+# даже если DNS-запрос клиента не прошёл через mihomo
+sniffer:
+  enable: true
+  sniff:
+    HTTP: { ports: [80, 8080] }
+    TLS: { ports: [443, 8443] }
+
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - '*.lan'
+    - '+.local'
+    - '+.keenetic.io'
+  nameserver:
+    - 8.8.8.8
+    - 1.1.1.1
+  # Если провайдер перехватывает обычный DNS — используйте DoH:
+  # nameserver:
+  #   - https://dns.google/dns-query
+  #   - https://cloudflare-dns.com/dns-query
+  proxy-server-nameserver:
+    - 8.8.8.8
+    - 1.1.1.1
+
+# TUN-режим для Keenetic: auto-route ВЫКЛЮЧЕН — в TUN заворачиваются только
+# клиенты политики «GrKa» (маршрутом в её таблице управляет GrKa Keen).
+# Имя устройства grka-tun не меняйте: его использует скрипт маршрутизации.
+tun:
+  enable: true
+  stack: system
+  device: grka-tun
+  auto-route: false
+  auto-redirect: false
+  auto-detect-interface: true
+  dns-hijack:
+    - any:53
+
+# Прокси удобно добавлять через панель: Конфигурация -> «Добавить прокси из ссылки».
+# Добавленные прокси автоматически появятся в группе «Весь трафик» (include-all),
+# а на вкладке «Селекторы» можно переключить весь трафик: напрямую (DIRECT) или через прокси.
+proxies: []
+
+proxy-groups:
+  - name: Весь трафик
+    type: select
+    include-all: true
+    proxies: [DIRECT]
+
+# Пример «всё через прокси, кроме российских ресурсов»:
+# rules:
+#   - GEOIP,RU,DIRECT
+#   - MATCH,Весь трафик
+
+rules:
+  - MATCH,Весь трафик

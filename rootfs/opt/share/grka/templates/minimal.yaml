@@ -1,0 +1,79 @@
+# title: Минимальный (селектор «Весь трафик»: напрямую или через прокси)
+# Документация mihomo: https://wiki.metacubex.one/
+#
+# Keenetic: трафик заворачивается только для клиентов политики «GrKa» —
+# auto-route выключен, имя TUN-устройства grka-tun не меняйте.
+
+mixed-port: 7890
+allow-lan: true
+bind-address: '*'
+mode: rule
+log-level: info
+ipv6: false
+
+external-controller: 0.0.0.0:9090
+external-ui: ui
+secret: ''
+
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+unified-delay: true
+tcp-concurrent: true
+
+sniffer:
+  enable: true
+  sniff:
+    HTTP: { ports: [80, 8080] }
+    TLS: { ports: [443, 8443] }
+
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - '*.lan'
+    - '+.local'
+    - '+.keenetic.io'
+  nameserver:
+    - 8.8.8.8
+    - 1.1.1.1
+  # Если провайдер перехватывает обычный DNS — используйте DoH:
+  # nameserver:
+  #   - https://dns.google/dns-query
+  #   - https://cloudflare-dns.com/dns-query
+  proxy-server-nameserver:
+    - 8.8.8.8
+    - 1.1.1.1
+
+tun:
+  enable: true
+  stack: system
+  device: grka-tun
+  auto-route: false
+  auto-redirect: false
+  auto-detect-interface: true
+  dns-hijack:
+    - any:53
+
+# Прокси добавляются кнопкой «Добавить прокси из ссылки».
+# Они автоматически появятся в группе «Весь трафик» (include-all), а на вкладке
+# «Селекторы» можно переключить весь трафик: напрямую (DIRECT) или через прокси.
+proxies: []
+
+proxy-groups:
+  - name: Весь трафик
+    type: select
+    include-all: true
+    proxies: [DIRECT]
+
+# Пример «всё через прокси, кроме российских ресурсов»:
+# rules:
+#   - GEOIP,RU,DIRECT
+#   - MATCH,Весь трафик
+
+rules:
+  - MATCH,Весь трафик

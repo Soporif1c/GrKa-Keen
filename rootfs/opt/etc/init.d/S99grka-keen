@@ -1,0 +1,78 @@
+#!/bin/sh
+# GrKa Keen - веб-панель (lighttpd, порт задаётся в /opt/etc/grka/lighttpd.conf)
+
+ENABLED=yes
+
+PATH="/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+LCONF="/opt/etc/grka/lighttpd.conf"
+PIDFILE="/opt/var/run/grka-lighttpd.pid"
+
+get_pid() {
+	[ -f "$PIDFILE" ] && cat "$PIDFILE" 2>/dev/null
+}
+
+is_running() {
+	local pid
+	pid="$(get_pid)"
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+do_start() {
+	if [ "$ENABLED" != "yes" ] && [ "$1" != "force" ]; then
+		echo "grka-keen: автозапуск отключён (ENABLED=no)"
+		return 0
+	fi
+	if is_running; then
+		echo "Веб-панель GrKa Keen уже запущена"
+		return 0
+	fi
+	command -v lighttpd >/dev/null 2>&1 || {
+		echo "lighttpd не найден. Установите: opkg install lighttpd lighttpd-mod-cgi"
+		return 1
+	}
+	mkdir -p /opt/var/run /opt/var/log/grka /opt/tmp
+	lighttpd -f "$LCONF" || return 1
+	echo "Веб-панель GrKa Keen запущена (порт из $LCONF)"
+}
+
+do_stop() {
+	local pid
+	pid="$(get_pid)"
+	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+		kill "$pid" 2>/dev/null
+		sleep 1
+		kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+		echo "Веб-панель GrKa Keen остановлена"
+	else
+		echo "Веб-панель GrKa Keen не запущена"
+	fi
+	rm -f "$PIDFILE"
+}
+
+case "$1" in
+start)
+	do_start "$2"
+	;;
+stop)
+	do_stop
+	;;
+restart)
+	do_stop
+	sleep 1
+	do_start force
+	;;
+status)
+	if is_running; then
+		echo "alive"
+		exit 0
+	else
+		echo "dead"
+		exit 1
+	fi
+	;;
+*)
+	echo "Использование: $0 start [force] | stop | restart | status"
+	exit 1
+	;;
+esac

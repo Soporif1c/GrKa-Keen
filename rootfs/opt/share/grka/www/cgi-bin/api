@@ -1,0 +1,305 @@
+#!/bin/sh
+# GrKa Keen - CGI-бэкенд веб-панели.
+# Протокол: POST /cgi-bin/api с JSON {"method": "...", "params": {...}} -> JSON-ответ.
+
+PATH="/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+. /opt/share/grka/scripts/common.sh
+
+SCRIPTS="/opt/share/grka/scripts"
+TEMPLATE_DIR="/opt/share/grka/templates"
+MIHOMO_DIR="/opt/etc/mihomo"
+CONFIG_FILE="$MIHOMO_DIR/config.yaml"
+BACKUP_DIR="$MIHOMO_DIR/backups"
+VERSION_FILE="/opt/share/grka/version"
+GRKA_CONF="/opt/etc/grka/grka.conf"
+INIT_MIHOMO="/opt/etc/init.d/S97mihomo"
+LOG_FILE="/opt/var/log/grka/mihomo.log"
+TASK_LOG="/tmp/grka-task.log"
+TASK_LOCK="/tmp/grka-task.lock"
+MAX_BACKUPS=10
+
+printf 'Status: 200\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
+
+BODY=""
+[ -n "$CONTENT_LENGTH" ] && [ "$CONTENT_LENGTH" -gt 0 ] 2>/dev/null && BODY="$(head -c "$CONTENT_LENGTH")"
+[ -n "$BODY" ] || BODY='{}'
+
+jq_body() {
+	printf '%s' "$BODY" | jq -r "$1" 2>/dev/null
+}
+
+METHOD="$(jq_body '.method // empty')"
+
+core_version() {
+	local b
+	b="$(core_bin)"
+	[ -n "$b" ] || return 0
+	"$b" -v 2>/dev/null | head -n1 | awk '{print $3}'
+}
+
+panel_version() {
+	cat "$VERSION_FILE" 2>/dev/null
+}
+
+task_running() {
+	[ -f "$TASK_LOCK" ] || return 1
+	local pid
+	pid="$(cat "$TASK_LOCK" 2>/dev/null)"
+	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+run_task() {
+	if task_running; then
+		jq -n '{started: false, error: "Другая задача ещё выполняется, дождитесь её завершения"}'
+		return
+	fi
+	: > "$TASK_LOG"
+	nohup setsid sh "$@" > "$TASK_LOG" 2>&1 < /dev/null &
+	echo $! > "$TASK_LOCK"
+	jq -n '{started: true}'
+}
+
+make_backup() {
+	[ -f "$CONFIG_FILE" ] || return 0
+	mkdir -p "$BACKUP_DIR"
+	cp "$CONFIG_FILE" "$BACKUP_DIR/config-$(date +%Y%m%d-%H%M%S).yaml"
+	ls -1t "$BACKUP_DIR"/config-*.yaml 2>/dev/null | tail -n +"$((MAX_BACKUPS + 1))" | while read -r f; do
+		rm -f "$f"
+	done
+}
+
+bool() {
+	# $1 - shell-условие уже вычислено кодом возврата: bool <код>
+	[ "$1" -eq 0 ] 2>/dev/null && echo true || echo false
+}
+
+case "$METHOD" in
+
+status)
+	PID="$(pidof mihomo 2>/dev/null | awk '{print $1}')"
+	MEM=""
+	[ -n "$PID" ] && MEM="$(awk '/VmRSS/ {print $2}' "/proc/$PID/status" 2>/dev/null)"
+	API_PORT="$(sed -n "s/^external-controller:.*:\([0-9]\{1,\}\).*/\1/p" "$CONFIG_FILE" 2>/dev/null | head -n1)"
+	API_SECRET="$(sed -n "s/^secret:[[:space:]]*[\"']\{0,1\}\([^\"']*\)[\"']\{0,1\}[[:space:]]*$/\1/p" "$CONFIG_FILE" 2>/dev/null | head -n1)"
+
+	core_ready; CORE_OK=$?
+	[ -n "$PID" ]; RUNNING=$?
+	grep -q '^ENABLED=yes' "$INIT_MIHOMO" 2>/dev/null; AUTOSTART=$?
+	[ -f "$CONFIG_FILE" ]; CFG=$?
+	[ -f "$MIHOMO_DIR/ui/index.html" ]; DASH=$?
+	compact_on; COMPACT=$?
+
+	# Состояние политики Keenetic
+	P_NAME="GrKa"; P_FOUND=0; P_MARK=""; P_TABLE=""; P_RULE=0; P_ROUTE=0; P_TUN=""; P_TUN_UP=0
+	eval "$(sh "$SCRIPTS/policy-route.sh" status 2>/dev/null)"
+	CLIENTS="$(sh "$SCRIPTS/policy-route.sh" clients 2>/dev/null | jq -Rn '[inputs]' 2>/dev/null)"
+	[ -n "$CLIENTS" ] || CLIENTS='[]'
+
+	jq -n \
+		--argjson running "$(bool $RUNNING)" \
+		--arg pid "$PID" \
+		--arg memory "$MEM" \
+		--argjson core_installed "$(bool $CORE_OK)" \
+		--arg core_version "$(core_version)" \
+		--arg panel_version "$(panel_version)" \
+		--argjson autostart "$(bool $AUTOSTART)" \
+		--argjson config_exists "$(bool $CFG)" \
+		--argjson dashboard_installed "$(bool $DASH)" \
+		--argjson compact "$(bool $COMPACT)" \
+		--arg api_port "${API_PORT:-9090}" \
+		--arg api_secret "$API_SECRET" \
+		--arg arch "$(mihomo_arch)" \
+		--arg p_name "$P_NAME" \
+		--argjson p_found "$([ "$P_FOUND" = "1" ] && echo true || echo false)" \
+		--arg p_mark "$P_MARK" \
+		--arg p_table "$P_TABLE" \
+		--argjson p_rule "$([ "$P_RULE" = "1" ] && echo true || echo false)" \
+		--argjson p_route "$([ "$P_ROUTE" = "1" ] && echo true || echo false)" \
+		--arg p_tun "$P_TUN" \
+		--argjson p_tun_up "$([ "$P_TUN_UP" = "1" ] && echo true || echo false)" \
+		--argjson p_clients "$CLIENTS" \
+		'{running: $running, pid: $pid, memory: $memory, core_installed: $core_installed,
+		  core_version: $core_version, panel_version: $panel_version, autostart: $autostart,
+		  config_exists: $config_exists, dashboard_installed: $dashboard_installed,
+		  compact: $compact, api_port: $api_port, api_secret: $api_secret, arch: $arch,
+		  policy: {name: $p_name, found: $p_found, mark: $p_mark, table: $p_table,
+		           rule_ok: $p_rule, route_ok: $p_route, tun: $p_tun, tun_up: $p_tun_up,
+		           clients: $p_clients}}'
+	;;
+
+service)
+	ACTION="$(jq_body '.params.action // empty')"
+	case "$ACTION" in
+	start)
+		"$INIT_MIHOMO" start force >/dev/null 2>&1
+		jq -n '{ok: true}'
+		;;
+	stop | restart)
+		"$INIT_MIHOMO" "$ACTION" >/dev/null 2>&1
+		jq -n '{ok: true}'
+		;;
+	enable)
+		sed -i 's/^ENABLED=.*/ENABLED=yes/' "$INIT_MIHOMO" 2>/dev/null
+		jq -n '{ok: true}'
+		;;
+	disable)
+		sed -i 's/^ENABLED=.*/ENABLED=no/' "$INIT_MIHOMO" 2>/dev/null
+		jq -n '{ok: true}'
+		;;
+	*)
+		jq -n '{ok: false, error: "Недопустимое действие"}'
+		;;
+	esac
+	;;
+
+get_config)
+	if [ -f "$CONFIG_FILE" ]; then
+		jq -Rs '{exists: true, content: .}' < "$CONFIG_FILE"
+	else
+		jq -n '{exists: false, content: ""}'
+	fi
+	;;
+
+set_config)
+	mkdir -p "$MIHOMO_DIR"
+	make_backup
+	jq_body '.params.content // ""' > "$CONFIG_FILE"
+	jq -n '{ok: true}'
+	;;
+
+check_config)
+	CONTENT="$(jq_body '.params.content // ""')"
+	TARGET="$CONFIG_FILE"
+	if [ -n "$CONTENT" ]; then
+		TARGET="/opt/tmp/grka-check.yaml"
+		mkdir -p /opt/tmp
+		printf '%s\n' "$CONTENT" > "$TARGET"
+	fi
+	BIN="$(ensure_core)"
+	if [ -z "$BIN" ]; then
+		RC=1
+		OUT="Ядро mihomo не установлено — установите его на вкладке «Статус»"
+	else
+		OUT="$("$BIN" -t -d "$MIHOMO_DIR" -f "$TARGET" 2>&1)"
+		RC=$?
+	fi
+	rm -f /opt/tmp/grka-check.yaml
+	printf '%s' "$OUT" | jq -Rs --argjson ok "$(bool $RC)" '{ok: $ok, output: .}'
+	;;
+
+get_log)
+	LINES="$(jq_body '.params.lines // 200')"
+	case "$LINES" in *[!0-9]*|"") LINES=200 ;; esac
+	tail -n "$LINES" "$LOG_FILE" 2>/dev/null | jq -Rs '{log: .}'
+	;;
+
+list_backups)
+	if [ -d "$BACKUP_DIR" ]; then
+		ls -1t "$BACKUP_DIR"/config-*.yaml 2>/dev/null | sed 's|.*/||' | jq -Rn '{backups: [inputs]}'
+	else
+		jq -n '{backups: []}'
+	fi
+	;;
+
+restore_backup)
+	NAME="$(jq_body '.params.name // empty')"
+	NAME="${NAME##*/}"
+	if [ -n "$NAME" ] && [ -f "$BACKUP_DIR/$NAME" ]; then
+		make_backup
+		cp "$BACKUP_DIR/$NAME" "$CONFIG_FILE"
+		jq -n '{ok: true}'
+	else
+		jq -n '{ok: false, error: "Бэкап не найден"}'
+	fi
+	;;
+
+check_updates)
+	CORE_LATEST="$(latest_tag "$MIHOMO_REPO")"
+	PANEL_LATEST="$(latest_tag "$GRKA_REPO")"
+	jq -n \
+		--arg core_current "$(core_version)" \
+		--arg core_latest "$CORE_LATEST" \
+		--arg panel_current "$(panel_version)" \
+		--arg panel_latest "${PANEL_LATEST#v}" \
+		'{core_current: $core_current, core_latest: $core_latest,
+		  panel_current: $panel_current, panel_latest: $panel_latest}'
+	;;
+
+update_core)
+	VERSION="$(jq_body '.params.version // empty')"
+	run_task "$SCRIPTS/core-update.sh" "$VERSION"
+	;;
+
+update_panel)
+	run_task "$SCRIPTS/self-update.sh"
+	;;
+
+install_dashboard)
+	run_task "$SCRIPTS/dashboard-install.sh"
+	;;
+
+set_compact)
+	ENABLED_ARG="$(jq_body '.params.enabled // empty')"
+	if [ "$ENABLED_ARG" = "1" ] || [ "$ENABLED_ARG" = "true" ]; then
+		run_task "$SCRIPTS/compact-toggle.sh" on
+	else
+		run_task "$SCRIPTS/compact-toggle.sh" off
+	fi
+	;;
+
+list_templates)
+	{
+		for f in "$TEMPLATE_DIR"/*.yaml; do
+			[ -f "$f" ] || continue
+			ID="${f##*/}"
+			ID="${ID%.yaml}"
+			TITLE="$(sed -n '1s/^#[[:space:]]*title:[[:space:]]*//p' "$f")"
+			jq -n --arg id "$ID" --arg title "${TITLE:-$ID}" '{id: $id, title: $title}'
+		done
+	} | jq -s '{templates: .}'
+	;;
+
+get_template)
+	TID="$(jq_body '.params.id // empty')"
+	TID="${TID##*/}"
+	if [ -n "$TID" ] && [ -f "$TEMPLATE_DIR/$TID.yaml" ]; then
+		jq -Rs '{ok: true, content: .}' < "$TEMPLATE_DIR/$TID.yaml"
+	else
+		jq -n '{ok: false, error: "Шаблон не найден"}'
+	fi
+	;;
+
+task_status)
+	task_running; TR=$?
+	tail -c 16384 "$TASK_LOG" 2>/dev/null | jq -Rs --argjson running "$(bool $TR)" '{running: $running, log: .}'
+	;;
+
+policy_apply)
+	OUT="$(sh "$SCRIPTS/policy-route.sh" apply 2>&1)"
+	RC=$?
+	printf '%s' "$OUT" | jq -Rs --argjson ok "$(bool $RC)" '{ok: $ok, output: .}'
+	;;
+
+set_policy)
+	NAME="$(jq_body '.params.name // empty' | tr -d "'\\\\\"" | head -c 64)"
+	if [ -z "$NAME" ]; then
+		jq -n '{ok: false, error: "Пустое имя политики"}'
+	else
+		mkdir -p /opt/etc/grka
+		if [ -f "$GRKA_CONF" ] && grep -q '^POLICY_NAME=' "$GRKA_CONF" 2>/dev/null; then
+			sed -i "s/^POLICY_NAME=.*/POLICY_NAME='$NAME'/" "$GRKA_CONF"
+		else
+			printf "POLICY_NAME='%s'\n" "$NAME" >> "$GRKA_CONF"
+		fi
+		# переприменяем маршрутизацию под новое имя
+		sh "$SCRIPTS/policy-route.sh" clear >/dev/null 2>&1
+		pidof mihomo >/dev/null 2>&1 && sh "$SCRIPTS/policy-route.sh" apply >/dev/null 2>&1
+		jq -n --arg name "$NAME" '{ok: true, name: $name}'
+	fi
+	;;
+
+*)
+	jq -n --arg m "$METHOD" '{error: ("Неизвестный метод: " + $m)}'
+	;;
+esac
