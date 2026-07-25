@@ -30,6 +30,19 @@ latest_tag() {
 		sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
 }
 
+# Запуск команды в фоне, отвязанно от родителя.
+# На стоковом busybox Keenetic нет setsid — используем его, только если он есть.
+# Использование: detach <лог-файл> команда [аргументы...]
+detach() {
+	local log="$1"
+	shift
+	if command -v setsid >/dev/null 2>&1; then
+		nohup setsid "$@" >> "$log" 2>&1 < /dev/null &
+	else
+		nohup "$@" >> "$log" 2>&1 < /dev/null &
+	fi
+}
+
 CORE_BIN="/opt/sbin/mihomo"
 CORE_GZ="/opt/share/grka/mihomo.gz"
 CORE_TMP="/tmp/grka/mihomo"

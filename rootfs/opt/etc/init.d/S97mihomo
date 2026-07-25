@@ -48,10 +48,10 @@ do_start() {
 	ulimit -n 65536 2>/dev/null
 
 	echo "$(date '+%Y-%m-%d %H:%M:%S') [grka] запуск mihomo ($BIN)" >> "$LOG"
-	nohup setsid "$BIN" -d "$CONF_DIR" >> "$LOG" 2>&1 &
+	detach "$LOG" "$BIN" -d "$CONF_DIR"
 
 	# ждём появления TUN и заворачиваем в него клиентов политики Keenetic
-	nohup setsid sh "$SCRIPTS/policy-route.sh" apply-wait >> "$LOG" 2>&1 &
+	detach "$LOG" sh "$SCRIPTS/policy-route.sh" apply-wait
 
 	echo "mihomo запущен"
 }

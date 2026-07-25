@@ -55,7 +55,7 @@ run_task() {
 		return
 	fi
 	: > "$TASK_LOG"
-	nohup setsid sh "$@" > "$TASK_LOG" 2>&1 < /dev/null &
+	detach "$TASK_LOG" sh "$@"
 	echo $! > "$TASK_LOCK"
 	jq -n '{started: true}'
 }
