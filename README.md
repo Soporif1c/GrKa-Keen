@@ -77,6 +77,19 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/Soporif1c/GrKa-Keen/main/i
 
 Установщик поставит зависимости, скачает последний релиз панели и ядро mihomo, создаст конфиг по умолчанию и запустит вебморду.
 
+### Вариант 2: через opkg (.ipk-пакет)
+
+```sh
+opkg update
+cd /opt/tmp
+wget https://github.com/Soporif1c/GrKa-Keen/releases/latest/download/grka-keen.ipk
+opkg install grka-keen.ipk
+```
+
+Зависимости (lighttpd, jq и др.) opkg подтянет из репозитория Entware сам. После установки останется поставить ядро mihomo — кнопкой «Установить ядро» на вкладке «Статус» (или `sh /opt/share/grka/scripts/core-update.sh`). Обновление пакета: скачать новый .ipk и снова `opkg install` (настройки и конфиг сохраняются). Удаление: `opkg remove grka-keen`.
+
+Сборка пакета из исходников: `./build-ipk.sh` → `grka-keen_<version>_all.ipk`.
+
 После установки откройте **http://<IP роутера>:1100** и:
 
 1. В веб-интерфейсе Keenetic создайте политику доступа **GrKa** (подключения не назначайте) и добавьте в неё клиентов (*Применение политик*)
