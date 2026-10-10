@@ -12,6 +12,8 @@ GRKA_SHARE="${GRKA_SHARE:-/opt/share/grka}"
 
 LCONF="$GRKA_ETC/lighttpd.conf"
 LPID="${GRKA_LPID:-/opt/var/run/grka-lighttpd.pid}"
+LIGHTTPD="${GRKA_LIGHTTPD:-lighttpd}"
+GRKA_TMPDIR="${GRKA_TMPDIR:-/opt/tmp}"
 WD_PIDFILE="$GRKA_RUN/watchdog.pid"
 
 # Конфиг lighttpd создаётся из settings.json при каждом запуске: порт переживает обновления
@@ -25,7 +27,7 @@ gen_lighttpd_conf() {
 # GrKa Keen — файл создаётся автоматически из $SETTINGS_FILE при запуске, ручные правки пропадут
 server.port          = $_lp
 server.document-root = "$GRKA_SHARE/www"
-server.upload-dirs   = ( "/opt/tmp" )
+server.upload-dirs   = ( "$GRKA_TMPDIR" )
 server.errorlog      = "$GRKA_LOGDIR/lighttpd.log"
 server.pid-file      = "$LPID"
 server.modules       = ( "mod_cgi" )
@@ -74,18 +76,22 @@ do_start() {
 		echo "grka-keen: автозапуск отключён (ENABLED=no)"
 		return 0
 	fi
-	mkdir -p /opt/var/run "$GRKA_LOGDIR" /opt/tmp "$GRKA_RUN" "$GRKA_ETC"
+	mkdir -p "$(dirname "$LPID")" "$GRKA_LOGDIR" "$GRKA_TMPDIR" "$GRKA_RUN" "$GRKA_ETC"
 	sh "$GRKA_SHARE/bin/grka" migrate >/dev/null 2>&1
-	gen_lighttpd_conf
-	if ! lighttpd_running; then
-		if ! command -v lighttpd >/dev/null 2>&1; then
-			echo "lighttpd не найден. Установите: opkg install lighttpd lighttpd-mod-cgi"
-			return 1
-		fi
-		lighttpd -f "$LCONF" || return 1
-	fi
+	# Сторож первым: маршрутизация VPN не должна зависеть от того, поднялась ли панель
 	if ! wd_running; then
 		spawn_bg /dev/null sh "$GRKA_SHARE/bin/grka-watchdog"
+	fi
+	gen_lighttpd_conf
+	if ! lighttpd_running; then
+		if ! command -v "$LIGHTTPD" >/dev/null 2>&1; then
+			echo "Сторож запущен, но панели нет: lighttpd не найден. Установите: opkg install lighttpd lighttpd-mod-cgi"
+			return 1
+		fi
+		if ! "$LIGHTTPD" -f "$LCONF"; then
+			echo "Сторож запущен, но панель не запустилась. Подробности в $GRKA_LOGDIR/lighttpd.log"
+			return 1
+		fi
 	fi
 	echo "GrKa Keen запущен, панель на порту $(settings_get panel_port)"
 }
