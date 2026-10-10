@@ -44,6 +44,22 @@ test_journal_suppresses_repeat_within_minute() {
 	assert_eq 1 "$(grep -c 'Другое событие' "$JOURNAL_FILE")"
 }
 
+vn() {
+	if ver_newer "$1" "$2"; then echo yes; else echo no; fi
+}
+
+test_ver_newer_semver_order() {
+	assert_eq yes "$(vn 1.0.0 1.0.0-alpha.1)" "релиз новее альфы"
+	assert_eq yes "$(vn v1.0.1 1.0.0)" "ведущая v не важна"
+	assert_eq yes "$(vn 1.0.0-beta.1 1.0.0-alpha.2)"
+	assert_eq yes "$(vn 1.0.0-alpha.10 1.0.0-alpha.2)" "номера сравниваются как числа"
+	assert_eq yes "$(vn 1.0.0 '')" "неизвестная установленная версия старше любой"
+	assert_eq no "$(vn 0.0.2 1.0.0-alpha.1)" "0.0.2 после альфы — откат, а не обновление"
+	assert_eq no "$(vn 1.0.0 1.0.0)"
+	assert_eq no "$(vn '' 1.0.0)" "неизвестная последняя версия не новее"
+	assert_eq no "$(vn 1.0.0-alpha.1 1.0.0)"
+}
+
 test_journal_rotates_over_limit() {
 	JOURNAL_MAX=50
 	journal info "1234567890123456789012345678901234567890"

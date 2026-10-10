@@ -121,7 +121,7 @@
 			return { backups: ['config-20260725-211358.yaml', 'config-20260725-205940.yaml', 'config-20260724-183122.yaml'] };
 		},
 		check_updates: function() {
-			return { core_current: 'v1.19.13', core_latest: 'v1.19.13', panel_current: '0.0.1', panel_latest: '0.0.1' };
+			return { core_current: 'v1.19.13', core_latest: 'v1.19.13', panel_current: '0.0.1', panel_latest: '0.0.1', panel_update: false };
 		},
 		check_config: function() { return { ok: true, output: 'configuration file ' + '/opt/etc/mihomo/config.yaml' + ' test is successful' }; },
 		task_status: function() { return { running: false, log: '' }; }

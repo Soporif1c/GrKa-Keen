@@ -307,13 +307,19 @@ m_restore_backup() {
 }
 
 m_check_updates() {
+	_pcur="$(cat "$VERSION_FILE" 2>/dev/null)"
+	_plat="$(latest_tag "$GRKA_REPO" | sed 's/^v//')"
+	# обновление панели — только на более новую версию: у альфы последний стабильный релиз старше
+	_pnew=false
+	if ver_newer "$_plat" "$_pcur"; then _pnew=true; fi
 	jqc -n \
 		--arg core_current "$(core_version)" \
 		--arg core_latest "$(latest_tag "$MIHOMO_REPO")" \
-		--arg panel_current "$(cat "$VERSION_FILE" 2>/dev/null)" \
-		--arg panel_latest "$(latest_tag "$GRKA_REPO" | sed 's/^v//')" \
+		--arg panel_current "$_pcur" \
+		--arg panel_latest "$_plat" \
+		--argjson panel_update "$_pnew" \
 		'{ok: true, core_current: $core_current, core_latest: $core_latest,
-		  panel_current: $panel_current, panel_latest: $panel_latest}'
+		  panel_current: $panel_current, panel_latest: $panel_latest, panel_update: $panel_update}'
 }
 
 m_update_core() {

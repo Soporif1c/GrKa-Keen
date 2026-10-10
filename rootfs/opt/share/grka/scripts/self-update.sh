@@ -11,13 +11,13 @@ fi
 GRKA_SHARE="${GRKA_SHARE:-/opt/share/grka}"
 . "$GRKA_SHARE/lib/common.sh"
 
-TMP_TAR="/opt/tmp/grka-panel.tar.gz"
+TMP_TAR="$GRKA_TMPDIR/grka-panel.tar.gz"
 
 cleanup() {
 	rm -f "$TASK_LOCK" "$TMP_TAR" /tmp/grka-self-update-run.sh
 }
 trap cleanup EXIT
-mkdir -p "$GRKA_RUN" /opt/tmp
+mkdir -p "$GRKA_RUN" "$GRKA_TMPDIR"
 echo $$ > "$TASK_LOCK"
 
 echo "Проверка последней версии GrKa Keen..."
@@ -25,8 +25,9 @@ TAG="$(latest_tag "$GRKA_REPO")"
 [ -n "$TAG" ] || { echo "ОШИБКА: не удалось получить версию с GitHub API"; exit 1; }
 
 CUR="$(cat "$GRKA_SHARE/version" 2>/dev/null)"
-if [ "v$CUR" = "$TAG" ]; then
-	echo "Уже установлена последняя версия ($CUR)"
+# только вперёд: у альфы последний стабильный релиз старше, и «обновление» на него было бы откатом
+if ! ver_newer "$TAG" "$CUR"; then
+	echo "Обновлять нечего: установлена версия $CUR, последний релиз $TAG не новее"
 	exit 0
 fi
 

@@ -13,7 +13,6 @@ GRKA_SHARE="${GRKA_SHARE:-/opt/share/grka}"
 LCONF="$GRKA_ETC/lighttpd.conf"
 LPID="${GRKA_LPID:-/opt/var/run/grka-lighttpd.pid}"
 LIGHTTPD="${GRKA_LIGHTTPD:-lighttpd}"
-GRKA_TMPDIR="${GRKA_TMPDIR:-/opt/tmp}"
 WD_PIDFILE="$GRKA_RUN/watchdog.pid"
 
 # Конфиг lighttpd создаётся из settings.json при каждом запуске: порт переживает обновления

@@ -370,7 +370,8 @@ var statusTab = {
 			u.panelLatest.textContent = panelLatest || 'не удалось получить';
 
 			var coreNew = coreLatest && coreLatest !== res.core_current;
-			var panelNew = panelLatest && panelLatest !== res.panel_current;
+			// решает сервер (сравнение версий): у альфы последний стабильный релиз старше, это не обновление
+			var panelNew = res.panel_update === true;
 
 			u.coreLatest.className = coreNew ? 'ok' : '';
 			u.panelLatest.className = panelNew ? 'ok' : '';

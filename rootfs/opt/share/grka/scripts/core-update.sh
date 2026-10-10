@@ -6,14 +6,14 @@ GRKA_SHARE="${GRKA_SHARE:-/opt/share/grka}"
 . "$GRKA_SHARE/lib/settings.sh"
 . "$GRKA_SHARE/lib/core.sh"
 
-TMP_GZ="/opt/tmp/grka-mihomo.gz"
-TMP_BIN="/opt/tmp/grka-mihomo"
+TMP_GZ="$GRKA_TMPDIR/grka-mihomo.gz"
+TMP_BIN="$GRKA_TMPDIR/grka-mihomo"
 
 cleanup() {
 	rm -f "$TASK_LOCK" "$TMP_GZ" "$TMP_BIN"
 }
 trap cleanup EXIT
-mkdir -p "$GRKA_RUN" /opt/tmp
+mkdir -p "$GRKA_RUN" "$GRKA_TMPDIR"
 echo $$ > "$TASK_LOCK"
 
 VERSION="${1:-}"

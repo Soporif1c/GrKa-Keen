@@ -3,14 +3,14 @@
 GRKA_SHARE="${GRKA_SHARE:-/opt/share/grka}"
 . "$GRKA_SHARE/lib/common.sh"
 
-TMP_TGZ="/opt/tmp/grka-ui.tgz"
+TMP_TGZ="$GRKA_TMPDIR/grka-ui.tgz"
 UI_DIR="$MIHOMO_DIR/ui"
 
 cleanup() {
 	rm -f "$TASK_LOCK" "$TMP_TGZ"
 }
 trap cleanup EXIT
-mkdir -p "$GRKA_RUN" /opt/tmp
+mkdir -p "$GRKA_RUN" "$GRKA_TMPDIR"
 echo $$ > "$TASK_LOCK"
 
 echo "Загрузка дашборда MetaCubeXD..."

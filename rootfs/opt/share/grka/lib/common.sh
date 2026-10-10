@@ -13,6 +13,7 @@ GRKA_RUN="${GRKA_RUN:-/tmp/grka}"
 GRKA_LOGDIR="${GRKA_LOGDIR:-/opt/var/log/grka}"
 GRKA_INITD="${GRKA_INITD:-/opt/etc/init.d}"
 GRKA_PROC="${GRKA_PROC:-/proc}"
+GRKA_TMPDIR="${GRKA_TMPDIR:-/opt/tmp}"
 MIHOMO_DIR="${MIHOMO_DIR:-/opt/etc/mihomo}"
 
 GRKA_REPO="Soporif1c/GrKa-Keen"
@@ -152,6 +153,35 @@ latest_tag() {
 	# $1 - owner/repo -> tag_name последнего стабильного релиза
 	fetch "https://api.github.com/repos/$1/releases/latest" 2>/dev/null |
 		sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
+}
+
+# Версия $1 новее $2 (порядок SemVer: 1.0.0-alpha.1 < 1.0.0-beta.1 < 1.0.0 < 1.0.1), ведущая v не важна.
+# Пустая $1 (не удалось узнать) не новее ничего, пустая $2 старше любой.
+# Нужна, чтобы альфа не «обновлялась» на последний стабильный релиз: GitHub releases/latest пропускает pre-release
+ver_newer() {
+	[ -n "$1" ] || return 1
+	awk -v a="${1#v}" -v b="${2#v}" '
+		function cmpid(x, y,   xn, yn) {
+			xn = (x ~ /^[0-9]+$/)
+			yn = (y ~ /^[0-9]+$/)
+			if (xn && yn) return (x + 0 > y + 0) - (x + 0 < y + 0)
+			if (xn) return -1
+			if (yn) return 1
+			return (x > y) - (x < y)
+		}
+		BEGIN {
+			if (b == "") exit 0
+			ia = index(a, "-"); ca = ia ? substr(a, 1, ia - 1) : a; pa = ia ? substr(a, ia + 1) : ""
+			ib = index(b, "-"); cb = ib ? substr(b, 1, ib - 1) : b; pb = ib ? substr(b, ib + 1) : ""
+			split(ca, xa, "."); split(cb, xb, ".")
+			for (i = 1; i <= 3; i++) { r = cmpid(xa[i] + 0, xb[i] + 0); if (r) exit (r > 0 ? 0 : 1) }
+			if (pa == pb) exit 1
+			if (pa == "") exit 0
+			if (pb == "") exit 1
+			na = split(pa, xa, "."); nb = split(pb, xb, ".")
+			for (i = 1; i <= na && i <= nb; i++) { r = cmpid(xa[i], xb[i]); if (r) exit (r > 0 ? 0 : 1) }
+			exit (na > nb ? 0 : 1)
+		}'
 }
 
 mihomo_arch() {
