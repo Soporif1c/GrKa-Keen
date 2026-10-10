@@ -93,12 +93,14 @@
 	};
 
 	var STATUS = {
+		ok: true, state: 'ok', warnings: [], paused: false, enabled: true,
+		api_open: false, core_error: '', core_error_log: '',
 		running: true, pid: '9184', memory: '47616',
 		core_installed: true, core_version: 'v1.19.13', panel_version: '0.0.1',
 		autostart: true, config_exists: true, dashboard_installed: true, compact: false,
 		api_port: '9090', api_secret: '', arch: 'mipsle-softfloat',
 		policy: {
-			name: 'GrKa', found: true, mark: '0xffffaab', table: '1001',
+			name: 'GrKa', found: true, mark: '0xffffaab', table: '1001', rci: 'ok',
 			rule_ok: true, route_ok: true, tun: 'grka-tun', tun_up: true,
 			clients: ['Mac', 'Oculus', 'PC', 'Телевизор зал']
 		}
@@ -108,6 +110,7 @@
 		status: function() { return STATUS; },
 		get_config: function() { return { exists: true, content: CONFIG }; },
 		get_log: function() { return { log: LOG }; },
+		journal: function() { return { ok: true, entries: [] }; },
 		list_templates: function() {
 			return { templates: [
 				{ id: 'minimal', title: 'Минимальный (селектор «Весь трафик»: напрямую или через прокси)' },

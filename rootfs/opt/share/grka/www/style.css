@@ -361,3 +361,15 @@ pre.term {
   .row > label.title { flex: none; }
   main { padding: 14px 12px 60px; }
 }
+
+.warnbox {
+  background: #3a3218;
+  border: 1px solid #6b5a22;
+  color: #f1dfa6;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+.warnbox div + div { margin-top: 6px; }

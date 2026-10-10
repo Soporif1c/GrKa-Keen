@@ -31,7 +31,7 @@ function appendAny(node, child) {
 function api(method, params) {
 	return window.fetch('cgi-bin/api', {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		headers: { 'Content-Type': 'application/json', 'X-GrKa-Request': '1' },
 		body: JSON.stringify({ method: method, params: params || {} })
 	}).then(function(r) {
 		if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -124,6 +124,7 @@ function refreshActiveTab() {
 /* ---------- Вкладка «Статус» ---------- */
 
 var statusTab = {
+	paused: false,
 	el: {},
 
 	render: function(root) {
@@ -166,6 +167,28 @@ var statusTab = {
 		u.btnDashInstall = el('button', { 'class': 'btn primary', onclick: function() {
 			runTask(api('install_dashboard'), 'Установка дашборда MetaCubeXD');
 		} }, 'Установить / обновить дашборд');
+		u.warnings = el('div', { 'class': 'warnbox', 'style': 'display:none' });
+		u.wdState = el('span', {}, '—');
+		u.coreError = el('pre', { 'class': 'term', 'style': 'display:none;margin-top:.5em;max-height:12em' }, '');
+		u.btnPause = el('button', { 'class': 'btn', onclick: function() {
+			api(self.paused ? 'service.resume' : 'service.pause').then(function(res) {
+				notify((res && (res.message || res.error)) || 'Готово', res && res.ok ? 'info' : 'error');
+				self.refresh();
+			});
+		} }, 'Поставить VPN на паузу');
+		u.btnSecureApi = el('button', { 'class': 'btn primary', 'style': 'display:none', onclick: function() {
+			api('expert.secure_api').then(function(res) {
+				notify((res && (res.message || res.error)) || 'Готово', res && res.ok ? 'info' : 'error');
+				self.refresh();
+			});
+		} }, 'Защитить API паролем');
+		u.token = el('input', { type: 'text', 'style': 'width:22em', placeholder: 'токен из Keenetic: Пользователи и доступ' });
+		u.btnTokenSave = el('button', { 'class': 'btn', 'style': 'margin-left:8px', onclick: function() {
+			api('settings.set', { rci_token: u.token.value.trim() }).then(function(res) {
+				if (res && res.ok) { notify('Токен сохранён'); u.token.value = ''; self.refresh(); }
+				else notify((res && res.error) || 'Ошибка сохранения', 'error');
+			});
+		} }, 'Сохранить');
 
 		/* --- Политика Keenetic --- */
 		u.policyName = el('input', { type: 'text', 'style': 'width:12em', value: 'GrKa' });
@@ -195,10 +218,12 @@ var statusTab = {
 			el('h2', {}, 'GrKa Keen'),
 			el('div', { 'class': 'descr' },
 				'Панель управления mihomo для Keenetic. Трафик заворачивается только для клиентов политики доступа Keenetic — остальные устройства работают как обычно.'),
+			u.warnings,
 
 			el('div', { 'class': 'section' },
 				el('h3', {}, 'Сервис mihomo'),
 				row('Состояние', [u.state, ' ', u.details]),
+				row('Сторож', [u.wdState, u.coreError]),
 				row('Версия ядра', u.coreVersion),
 				row('Автозапуск', u.autostart),
 				row('Компактный режим', [
@@ -206,7 +231,7 @@ var statusTab = {
 					el('span', { 'class': 'hint', 'style': 'margin-left:.5em' },
 						'ядро хранится сжатым в /opt (~12 МБ вместо ~35) и распаковывается в RAM при старте')
 				]),
-				row('Управление', el('div', { 'class': 'btnrow' }, [u.btnStart, u.btnStop, u.btnRestart]))),
+				row('Управление', el('div', { 'class': 'btnrow' }, [u.btnStart, u.btnStop, u.btnRestart, u.btnSecureApi]))),
 
 			el('div', { 'class': 'section' },
 				el('h3', {}, 'Политика доступа Keenetic'),
@@ -219,7 +244,8 @@ var statusTab = {
 				row('Состояние', u.policyState),
 				row('Маршрутизация', u.policyRoute),
 				row('Клиенты политики', u.policyClients),
-				row('Действия', u.btnPolicyApply)),
+				row('Токен RCI', [u.token, u.btnTokenSave, el('div', { 'class': 'hint' }, 'Нужен на KeeneticOS 5.2 и новее. Пустое поле и «Сохранить» — удалить токен')]),
+				row('Действия', el('div', { 'class': 'btnrow' }, [u.btnPolicyApply, u.btnPause]))),
 
 			el('div', { 'class': 'section' },
 				el('h3', {}, 'Обновления'),
@@ -245,6 +271,19 @@ var statusTab = {
 
 	update: function(st) {
 		var u = this.el;
+		var WD = { ok: 'всё в порядке', starting: 'запускаю ядро', waiting_policy: 'жду политику Keenetic',
+			paused: 'VPN на паузе', stopped: 'ядро остановлено', error: 'ошибка', down: 'не запущен' };
+		u.wdState.textContent = WD[st.state] || st.state || '—';
+		u.wdState.className = st.state === 'ok' ? 'ok' : ((st.state === 'error' || st.state === 'down') ? 'bad' : 'warn');
+		var warns = st.warnings || [];
+		u.warnings.innerHTML = '';
+		warns.forEach(function(w) { u.warnings.appendChild(el('div', {}, w)); });
+		u.warnings.style.display = warns.length ? '' : 'none';
+		u.coreError.textContent = st.core_error ? st.core_error + (st.core_error_log ? '\n\n' + st.core_error_log : '') : '';
+		u.coreError.style.display = st.core_error ? '' : 'none';
+		this.paused = !!st.paused;
+		u.btnPause.textContent = st.paused ? 'Снять паузу' : 'Поставить VPN на паузу';
+		u.btnSecureApi.style.display = st.api_open ? '' : 'none';
 
 		u.state.textContent = st.running ? 'запущен' : 'остановлен';
 		u.state.className = st.running ? 'ok' : 'bad';
@@ -303,7 +342,9 @@ var statusTab = {
 					: ' — TUN-интерфейс ' + (p.tun || '') + ' не найден (проверьте tun.device в конфиге)')
 			]);
 		} else {
-			appendAny(u.policyRoute, el('span', { 'class': 'hint' }, 'mihomo остановлен — у клиентов политики нет интернета (режим резервирования)'));
+			appendAny(u.policyRoute, el('span', { 'class': 'hint' }, st.paused
+				? 'VPN на паузе: устройства политики идут напрямую'
+				: 'ядро остановлено: у устройств политики нет интернета (без утечек мимо VPN)'));
 		}
 
 		u.policyClients.innerHTML = '';
@@ -847,11 +888,19 @@ var configTab = {
 	},
 
 	save: function(restart) {
-		var self = this;
-		return api('set_config', { content: this.textarea.value }).then(function() {
-			if (restart) return api('service', { action: 'restart' });
-		}).then(function() {
-			notify(restart ? 'Конфигурация сохранена, mihomo перезапущен' : 'Конфигурация сохранена');
+		return api('set_config', { content: this.textarea.value }).then(function(res) {
+			if (!res || !res.ok) {
+				modal('❌ Конфигурация не сохранена', [
+					el('p', {}, (res && res.error) || 'Ошибка сохранения'),
+					res && res.output ? el('pre', { 'class': 'term', 'style': 'max-height:50vh' }, res.output) : null
+				], [el('button', { 'class': 'btn', onclick: closeModal }, 'Закрыть')]);
+				return false;
+			}
+			if (res.warning) notify(res.warning, 'error');
+			if (restart) return api('service', { action: 'restart' }).then(function() { return true; });
+			return true;
+		}).then(function(saved) {
+			if (saved) notify(restart ? 'Конфигурация сохранена, ядро перезапускается' : 'Конфигурация сохранена');
 		});
 	},
 
@@ -993,6 +1042,10 @@ var logsTab = {
 
 		this.autoscroll = el('input', { type: 'checkbox', checked: true });
 
+		this.sourceSelect = el('select', { onchange: function() { self.fetchLog(); } },
+			el('option', { value: 'journal' }, 'Журнал сторожа'),
+			el('option', { value: 'core' }, 'Лог ядра'));
+
 		var pauseBtn = el('button', { 'class': 'btn', onclick: function(ev) {
 			self.paused = !self.paused;
 			ev.target.textContent = self.paused ? 'Продолжить' : 'Пауза';
@@ -1000,9 +1053,10 @@ var logsTab = {
 
 		appendAny(root, [
 			el('h2', {}, 'Логи mihomo'),
-			el('div', { 'class': 'descr' }, 'Журнал сервиса (/opt/var/log/grka/mihomo.log), автообновление каждые 3 секунды. Здесь же видны сообщения о маршрутизации политики.'),
+			el('div', { 'class': 'descr' }, 'Журнал сторожа (что он проверял и чинил) и лог ядра (в памяти роутера, ротация при 1 МБ). Автообновление каждые 3 секунды.'),
 			el('div', { 'class': 'section' }, [
 				el('div', { 'class': 'btnrow', 'style': 'margin-bottom:.6em' }, [
+					this.sourceSelect,
 					this.filterInput,
 					this.linesSelect,
 					pauseBtn,
@@ -1032,7 +1086,7 @@ var logsTab = {
 	fetchLog: function() {
 		var self = this;
 		if (this.paused) return Promise.resolve();
-		return api('get_log', { lines: parseInt(this.linesSelect.value, 10) }).then(function(res) {
+		return api('get_log', { lines: parseInt(this.linesSelect.value, 10), source: this.sourceSelect.value }).then(function(res) {
 			self.raw = (res && res.log) || '';
 			self.applyFilter();
 		}).catch(function() {});
