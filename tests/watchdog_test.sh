@@ -348,6 +348,35 @@ test_xkeen_detected_warning() {
 	assert_contains "$(st '.warnings | join(" ")')" "XKeen"
 }
 
+test_boot_stop_lasts_until_reboot_when_autostart_on() {
+	settings_init
+	state_init
+	state_set enabled false
+	wd_boot
+	assert_eq true "$(state_get enabled)" "после перезагрузки при автозапуске ядро снова включено"
+	assert_file_missing "$GRKA_RUN/hold"
+}
+
+test_boot_restart_keeps_user_stop() {
+	settings_init
+	state_init
+	wd_boot
+	state_set enabled false
+	wd_boot
+	assert_eq false "$(state_get enabled)" "перезапуск сторожа без перезагрузки не отменяет «Остановить»"
+}
+
+test_boot_autostart_off_holds_only_first_start() {
+	settings_init
+	state_init
+	settings_set autostart false
+	wd_boot
+	assert_file_exists "$GRKA_RUN/hold" "после загрузки без автозапуска ядро ждёт кнопки"
+	rm -f "$GRKA_RUN/hold"
+	wd_boot
+	assert_file_missing "$GRKA_RUN/hold" "перезапуск сторожа не останавливает ядро, запущенное вручную"
+}
+
 test_wd_main_second_instance_exits() {
 	mkdir -p "$GRKA_PROC/$$"
 	printf 'sh\000/opt/share/grka/bin/grka-watchdog\000' > "$GRKA_PROC/$$/cmdline"

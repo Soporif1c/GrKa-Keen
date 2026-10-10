@@ -420,6 +420,20 @@ wd_sleep() {
 	done
 }
 
+# Первый запуск сторожа после загрузки роутера: $GRKA_RUN лежит в RAM (/tmp) и после перезагрузки пуст.
+# «Остановить» действует до перезагрузки: при автозапуске ядро снова включается, без автозапуска ждёт кнопки.
+# Перезапуск сторожа без перезагрузки (обновление панели) ничего не меняет
+wd_boot() {
+	[ ! -e "$GRKA_RUN/booted" ] || return 0
+	mkdir -p "$GRKA_RUN"
+	: > "$GRKA_RUN/booted"
+	if [ "$(settings_get autostart)" = false ]; then
+		flag_set hold
+	elif [ "$(state_get enabled)" = false ]; then
+		state_set enabled true
+	fi
+}
+
 wd_main() {
 	mkdir -p "$GRKA_RUN" "$CACHE_DIR"
 	_wpf="$GRKA_RUN/watchdog.pid"
@@ -432,7 +446,7 @@ wd_main() {
 	settings_init
 	state_init
 	rm -f "$WD_ENV"
-	[ "$(settings_get autostart)" != false ] || flag_set hold
+	wd_boot
 	_wstart="$(now_ts)"
 	journal info "Сторож запущен"
 	while :; do
