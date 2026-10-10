@@ -1,8 +1,5 @@
 #!/bin/sh
-# GrKa Keen - ndm-хук: переприменение маршрутизации политики при изменении интерфейсов
-
-pidof mihomo >/dev/null 2>&1 || exit 0
-
-sh /opt/share/grka/scripts/policy-route.sh apply >/dev/null 2>&1
-
+# GrKa Keen — изменилось состояние интерфейса. Флаг для сторожа, правила он проверит сам.
+_run="${GRKA_RUN:-/tmp/grka}"
+mkdir -p "$_run" && : > "$_run/dirty"
 exit 0
