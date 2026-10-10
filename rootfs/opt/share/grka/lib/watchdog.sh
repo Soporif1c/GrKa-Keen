@@ -320,7 +320,7 @@ wd_warnings() {
 		[ "$WD_RCI_STATE" != nopolicy ] || echo "Политика «$(settings_get policy_name)» не найдена. Создайте её в Keenetic: Приоритеты подключений, Политики доступа в интернет"
 		[ "$WD_RCI_STATE" != down ] || echo "RCI роутера не отвечает"
 		if [ -n "$WD_GAMING_IPS" ] && [ -n "$WD_MARK" ] && [ -z "${WD_DNS_PORT:-}" ]; then
-			echo "У игровых устройств VPN по доменам не работает: в конфиге ядра нет DNS-слушателя (dns.listen). Их DNS идёт через роутер напрямую"
+			echo "У игровых устройств VPN по доменам не работает: у ядра нет DNS-слушателя на сетевом адресе (нужны dns.enable: true и dns.listen, например 0.0.0.0:1053). Их DNS идёт через роутер напрямую"
 		fi
 		if ls "$GRKA_INITD"/S*xkeen* >/dev/null 2>&1; then
 			echo "Установлен XKeen. Он конфликтует с GrKa Keen: остановите или удалите его"

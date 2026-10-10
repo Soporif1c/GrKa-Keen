@@ -153,25 +153,33 @@ core_tun() {
 	echo "${_td:-Meta}"
 }
 
-# Порт DNS-слушателя ядра (dns.listen) или пусто, если DNS ядра выключен или не задан.
-# Без слушателя DNS игровых устройств перенаправлять нельзя: они останутся без DNS
+# Порт DNS-слушателя ядра (dns.listen) или пусто, если слушателя нет.
+# Без слушателя DNS игровых устройств перенаправлять нельзя: они останутся без DNS.
+# Слушателя нет, если DNS ядра не включён явно (enable: true, по умолчанию в mihomo он выключен)
+# или слушает только loopback: REDIRECT отправляет запрос на адрес входящего интерфейса
 core_dns_port() {
 	_dcf="$(core_config)"
 	[ -f "$_dcf" ] || return 0
 	awk '
+		function listen_at(v,   n, a, host) {
+			gsub(/["\047]/, "", v)
+			n = split(v, a, ":")
+			port = a[n]
+			host = substr(v, 1, length(v) - length(a[n]) - 1)
+			loop = (host ~ /^(127\.|localhost$|\[::1\]$|::1$)/)
+		}
 		/^dns:[[:space:]]*\{/ {
-			if ($0 ~ /enable:[[:space:]]*false/) exit
+			if ($0 ~ /enable:[[:space:]]*true/) on = 1
 			if (match($0, /listen:[[:space:]]*[^,}[:space:]]+/)) {
-				v = substr($0, RSTART, RLENGTH); sub(/listen:[[:space:]]*/, "", v); gsub(/["\047]/, "", v)
-				n = split(v, a, ":"); port = a[n]
+				v = substr($0, RSTART, RLENGTH); sub(/listen:[[:space:]]*/, "", v); listen_at(v)
 			}
 			exit
 		}
 		/^dns:/ { indns = 1; next }
 		indns && /^[^[:space:]#]/ { exit }
-		indns && /^[[:space:]]+enable:[[:space:]]*false/ { off = 1 }
-		indns && /^[[:space:]]+listen:/ { v = $2; gsub(/["\047]/, "", v); n = split(v, a, ":"); port = a[n] }
-		END { if (!off && port ~ /^[0-9]+$/) print port }
+		indns && /^[[:space:]]+enable:[[:space:]]*true/ { on = 1 }
+		indns && /^[[:space:]]+listen:/ { listen_at($2) }
+		END { if (on && !loop && port ~ /^[0-9]+$/) print port }
 	' "$_dcf"
 }
 

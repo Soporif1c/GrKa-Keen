@@ -115,6 +115,18 @@ test_core_dns_port_variants() {
 	assert_eq "" "$(core_dns_port)"
 }
 
+test_core_dns_port_needs_enable_and_network_listener() {
+	settings_init
+	printf 'dns:\n  listen: 0.0.0.0:1053\n' > "$MIHOMO_DIR/config.yaml"
+	assert_eq "" "$(core_dns_port)" "без enable: true DNS mihomo выключен"
+	printf 'dns:\n  enable: true\n  listen: 127.0.0.1:1053\n' > "$MIHOMO_DIR/config.yaml"
+	assert_eq "" "$(core_dns_port)" "слушатель на loopback перенаправлению недоступен"
+	printf 'dns: { enable: true, listen: "[::1]:1053" }\n' > "$MIHOMO_DIR/config.yaml"
+	assert_eq "" "$(core_dns_port)" "loopback IPv6 тоже"
+	printf 'dns:\n  enable: true\n  listen: :1053\n' > "$MIHOMO_DIR/config.yaml"
+	assert_eq 1053 "$(core_dns_port)" "пустой адрес — все интерфейсы"
+}
+
 test_core_api_port_and_secret() {
 	settings_init
 	printf "external-controller: 0.0.0.0:9191\nsecret: 'abc'\n" > "$MIHOMO_DIR/config.yaml"
