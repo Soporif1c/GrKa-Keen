@@ -19,6 +19,27 @@ test_desired_rules_paused() {
 	assert_contains "$_w" "99|all|all|0xffffaab|main"
 }
 
+test_desired_rules_skip_invalid_and_duplicate_ips() {
+	_w="$(rt_desired_rules 0xffffaab false "192.168.1.90 192.168.1.90 192.168.001.090 192.168.1.300 1.2.3 abc 10.0.0.0")"
+	assert_eq 2 "$(printf '%s\n' "$_w" | grep -c '^97|')"
+	assert_eq 1 "$(printf '%s\n' "$_w" | grep -c '^97|192.168.1.90|')"
+	assert_eq 1 "$(printf '%s\n' "$_w" | grep -c '^97|10.0.0.0|')"
+	assert_not_contains "$_w" "192.168.001.090"
+	assert_not_contains "$_w" "192.168.1.300"
+}
+
+test_rules_apply_adds_new_before_deleting_old() {
+	rt_rules_apply 0xffffaab false "192.168.1.90" >/dev/null
+	: > "$STUB/calls"
+	rt_rules_apply 0xffffaac false "192.168.1.90" >/dev/null
+	_add="$(grep -n 'rule add pref 99 fwmark 0xffffaac lookup 1001' "$STUB/calls" | cut -d: -f1)"
+	_del="$(grep -n 'rule del pref 99 fwmark 0xffffaab lookup 1001' "$STUB/calls" | cut -d: -f1)"
+	[ -n "$_add" ] && [ -n "$_del" ] || fail "нет нужных вызовов: add=[$_add] del=[$_del]"
+	[ "${_add:-0}" -lt "${_del:-0}" ] || fail "новое правило 99 должно появиться раньше, чем удалится старое"
+	assert_eq 1 "$(ip rule show | grep -c 'lookup 1001')"
+	assert_not_contains "$(ip rule show)" "0xffffaab"
+}
+
 test_current_rules_parses_real_output_and_ignores_foreign() {
 	ip() {
 		printf '0:\tfrom all lookup local\n96:\tfrom all to 10.0.0.0/8 fwmark 0xffffaab lookup main\n97:\tfrom 192.168.1.90 fwmark 0xffffaab lookup 1002\n98:\tfrom all fwmark 0x5 lookup 200\n99:\tfrom all fwmark 0xffffaab lookup 1001\n100:\tfrom all fwmark 0xffffaaa lookup 42\n32766:\tfrom all lookup main\n'

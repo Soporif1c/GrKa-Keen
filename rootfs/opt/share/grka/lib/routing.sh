@@ -12,7 +12,27 @@ RT_TUN="${RT_TUN:-grka-tun}"
 RT_FAKE_RANGE="198.18.0.0/15"
 RT_PRIVATE="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10"
 
-# $1 - метка, $2 - пауза (true/false), $3 - IP игровых устройств через пробел
+# Канонический IPv4: четыре числа 0–255 без ведущих нулей. Иначе ip rule add не пройдёт или ядро
+# напечатает адрес не так, как мы его записали, и правила переставлялись бы на каждом проходе
+rt_ipv4_ok() {
+	case "$1" in
+	"" | *[!0-9.]* | .* | *. | *..*) return 1 ;;
+	esac
+	_rifs="$IFS"
+	IFS=.
+	# shellcheck disable=SC2086
+	set -- $1
+	IFS="$_rifs"
+	[ $# -eq 4 ] || return 1
+	for _oc in "$@"; do
+		case "$_oc" in
+		0?*) return 1 ;;
+		esac
+		[ "${#_oc}" -le 3 ] && [ "$_oc" -le 255 ] || return 1
+	done
+}
+
+# $1 - метка, $2 - пауза (true/false), $3 - IP игровых устройств через пробел (неверные и повторы пропускаются)
 rt_desired_rules() {
 	for _rn in $RT_PRIVATE; do
 		echo "96|all|$_rn|$1|main"
@@ -21,10 +41,16 @@ rt_desired_rules() {
 		echo "99|all|all|$1|main"
 		return 0
 	fi
+	_rips=""
 	for _ri in $3; do
+		rt_ipv4_ok "$_ri" || continue
+		case " $_rips " in *" $_ri "*) continue ;; esac
+		_rips="$_rips $_ri"
+	done
+	for _ri in $_rips; do
 		echo "97|$_ri|all|$1|$RT_TABLE_GAME"
 	done
-	for _ri in $3; do
+	for _ri in $_rips; do
 		echo "98|$_ri|all|$1|main"
 	done
 	echo "99|all|all|$1|$RT_TABLE_CAPTURE"
@@ -49,32 +75,50 @@ rt_current_rules() {
 	}'
 }
 
+# $1 - add|del, $2 - правило "pref|from|to|mark|table"
+rt_rule_cmd() {
+	_rcl="$2"
+	_rcp="${_rcl%%|*}"
+	_rcl="${_rcl#*|}"
+	_rcf="${_rcl%%|*}"
+	_rcl="${_rcl#*|}"
+	_rct="${_rcl%%|*}"
+	_rcl="${_rcl#*|}"
+	_rcm="${_rcl%%|*}"
+	_rctb="${_rcl#*|}"
+	set -- "$1" pref "$_rcp"
+	[ "$_rcf" = all ] || set -- "$@" from "$_rcf"
+	[ "$_rct" = all ] || set -- "$@" to "$_rct"
+	[ -z "$_rcm" ] || set -- "$@" fwmark "$_rcm"
+	set -- "$@" lookup "$_rctb"
+	ip rule "$@" 2>/dev/null
+}
+
 rt_rules_flush() {
-	rt_current_rules | while IFS='|' read -r _p _f _t _m _tb; do
-		set -- del pref "$_p"
-		[ "$_f" = all ] || set -- "$@" from "$_f"
-		[ "$_t" = all ] || set -- "$@" to "$_t"
-		[ -z "$_m" ] || set -- "$@" fwmark "$_m"
-		set -- "$@" lookup "$_tb"
-		ip rule "$@" 2>/dev/null
+	rt_current_rules | while IFS= read -r _l; do
+		[ -z "$_l" ] || rt_rule_cmd del "$_l"
 	done
 }
 
-# Приводит правила к желаемым. При любом расхождении удаляет все наши и ставит заново (доли секунды)
+# Приводит правила к желаемым. Сначала добавляет недостающие, потом удаляет лишние и повторы:
+# при смене метки или паузе правило 99 не пропадает ни на миг
 rt_rules_apply() {
-	_want="$(rt_desired_rules "$1" "$2" "$3")"
-	_have="$(rt_current_rules)"
-	if [ "$(printf '%s\n' "$_want" | sort)" = "$(printf '%s\n' "$_have" | sort)" ]; then
-		return 0
-	fi
-	rt_rules_flush
-	printf '%s\n' "$_want" | while IFS='|' read -r _p _f _t _m _tb; do
-		[ -n "$_p" ] || continue
-		set -- add pref "$_p"
-		[ "$_f" = all ] || set -- "$@" from "$_f"
-		[ "$_t" = all ] || set -- "$@" to "$_t"
-		set -- "$@" fwmark "$_m" lookup "$_tb"
-		ip rule "$@" 2>/dev/null
+	_want="$(rt_desired_rules "$1" "$2" "$3" | sort -u)"
+	_have="$(rt_current_rules | sort)"
+	[ "$_want" != "$_have" ] || return 0
+	printf '%s\n' "$_want" | while IFS= read -r _l; do
+		[ -n "$_l" ] || continue
+		printf '%s\n' "$_have" | grep -qxF -- "$_l" || rt_rule_cmd add "$_l"
+	done
+	printf '%s\n' "$_have" | uniq -c | while read -r _cnt _l; do
+		[ -n "$_l" ] || continue
+		_keep=0
+		if printf '%s\n' "$_want" | grep -qxF -- "$_l"; then _keep=1; fi
+		_extra=$((_cnt - _keep))
+		while [ "$_extra" -gt 0 ]; do
+			rt_rule_cmd del "$_l"
+			_extra=$((_extra - 1))
+		done
 	done
 	echo changed
 }
