@@ -101,7 +101,8 @@ rt_rules_flush() {
 }
 
 # Приводит правила к желаемым. Сначала добавляет недостающие, потом удаляет лишние и повторы:
-# при смене метки или паузе правило 99 не пропадает ни на миг
+# при смене метки или паузе правило 99 не пропадает ни на миг.
+# "changed" печатается, только если правила действительно стали желаемыми; иначе код 1
 rt_rules_apply() {
 	_want="$(rt_desired_rules "$1" "$2" "$3" | sort -u)"
 	_have="$(rt_current_rules | sort)"
@@ -120,27 +121,33 @@ rt_rules_apply() {
 			_extra=$((_extra - 1))
 		done
 	done
+	[ "$(rt_current_rules | sort)" = "$_want" ] || return 1
 	echo changed
 }
 
-# $1 - поднят ли TUN (true/false). unreachable в 1001 стоит всегда: без ядра нет утечки мимо VPN
+# Маршрут в таблицу: "changed" при успехе, код 1 при отказе. $@ - аргументы ip route replace
+rt_route_set() {
+	if ip route replace "$@" 2>/dev/null; then echo changed; else return 1; fi
+}
+
+# $1 - поднят ли TUN (true/false). unreachable в 1001 стоит всегда: без ядра нет утечки мимо VPN.
+# Код 1, если какой-то маршрут поставить не удалось
 rt_tables_apply() {
 	_tc=""
+	_tf=0
 	if ! ip route show table "$RT_TABLE_CAPTURE" 2>/dev/null | grep -q '^unreachable default'; then
-		ip route replace unreachable default metric 4294967295 table "$RT_TABLE_CAPTURE" 2>/dev/null
-		_tc=1
+		_tc="$_tc$(rt_route_set unreachable default metric 4294967295 table "$RT_TABLE_CAPTURE")" || _tf=1
 	fi
 	if [ "$1" = true ]; then
 		if ! ip route show table "$RT_TABLE_CAPTURE" 2>/dev/null | grep -q "^default dev $RT_TUN"; then
-			ip route replace default dev "$RT_TUN" table "$RT_TABLE_CAPTURE" 2>/dev/null
-			_tc=1
+			_tc="$_tc$(rt_route_set default dev "$RT_TUN" table "$RT_TABLE_CAPTURE")" || _tf=1
 		fi
 		if ! ip route show table "$RT_TABLE_GAME" 2>/dev/null | grep -q "^$RT_FAKE_RANGE dev $RT_TUN"; then
-			ip route replace "$RT_FAKE_RANGE" dev "$RT_TUN" table "$RT_TABLE_GAME" 2>/dev/null
-			_tc=1
+			_tc="$_tc$(rt_route_set "$RT_FAKE_RANGE" dev "$RT_TUN" table "$RT_TABLE_GAME")" || _tf=1
 		fi
 	fi
 	[ -z "$_tc" ] || echo changed
+	return $_tf
 }
 
 rt6_current_marks() {
@@ -153,14 +160,19 @@ rt6_flush() {
 	done
 }
 
+# Есть ли IPv6 в системе: без модуля IPv6 блокировать нечего, а ip -6 rule завершается ошибкой
+rt6_available() {
+	[ -e "$GRKA_PROC/net/if_inet6" ]
+}
+
 # IPv6 для меченого трафика запрещён: устройства политики переходят на IPv4 (спека §5.5)
-# $1 - метка, $2 - блокировать ли (true/false)
+# $1 - метка, $2 - блокировать ли (true/false). Код 1, если роутер не принял правило
 rt6_apply() {
 	_h6="$(rt6_current_marks)"
 	if [ "$2" = true ]; then
 		[ "$_h6" != "$1" ] || return 0
 		rt6_flush
-		ip -6 rule add pref 99 fwmark "$1" prohibit 2>/dev/null
+		ip -6 rule add pref 99 fwmark "$1" prohibit 2>/dev/null || return 1
 		echo changed
 	elif [ -n "$_h6" ]; then
 		rt6_flush

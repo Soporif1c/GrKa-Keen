@@ -343,6 +343,51 @@ test_tick_gaming_dns_uses_core_port() {
 	assert_contains "$(iptables -t nat -S GRKA_DNS)" "--to-ports 5353"
 }
 
+test_tick_ipv6_rule_failure_warns_without_journal_flood() {
+	fake_core
+	base_rci_ok
+	mkdir -p "$GRKA_PROC/net"
+	: > "$GRKA_PROC/net/if_inet6"
+	stub_fail "ip -6 rule add"
+	wd_tick
+	NOW=1010; wd_tick
+	NOW=1020; wd_tick
+	assert_eq 1 "$(grep -c 'Правила маршрутизации' "$JOURNAL_FILE")" "несработавшее правило IPv6 — не ремонт, журнал не засоряется"
+	assert_contains "$(st '.warnings | join(" ")')" "IPv6"
+	assert_eq ok "$(st .state)"
+}
+
+test_tick_without_ipv6_skips_v6_rule() {
+	fake_core
+	base_rci_ok
+	wd_tick
+	assert_not_contains "$(cat "$STUB/calls")" "ip -6 rule add" "без IPv6 в системе блокировать нечего"
+	assert_eq "" "$(st '.warnings | join(" ")')"
+}
+
+test_tick_rule_failure_warns_and_not_ok() {
+	fake_core
+	base_rci_ok
+	stub_fail "ip rule add"
+	wd_tick
+	NOW=1010; wd_tick
+	assert_eq false "$(st .routing.rules_ok)"
+	assert_contains "$(st '.warnings | join(" ")')" "правила маршрутизации"
+	assert_eq 1 "$(grep -c 'Не удалось применить правила' "$JOURNAL_FILE")"
+	assert_eq 0 "$(grep -c 'Правила маршрутизации применены' "$JOURNAL_FILE")"
+}
+
+test_tick_dns_redirect_failure_warns() {
+	fake_core
+	base_rci_ok
+	state_set_device aa:bb:cc:00:00:01 gaming
+	stub_fail "REDIRECT"
+	wd_tick
+	NOW=1010; wd_tick
+	assert_eq 0 "$(grep -c 'Перенаправление DNS' "$JOURNAL_FILE")" "несработавшее перенаправление — не обновление"
+	assert_contains "$(st '.warnings | join(" ")')" "DNS игровых устройств"
+}
+
 test_tick_disabled_stops_core_keeps_capture() {
 	fake_core
 	base_rci_ok

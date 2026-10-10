@@ -43,13 +43,27 @@ now_ts() {
 	date +%s
 }
 
-# Событие в журнал. $1 - info|warn|error, $2 - текст (переводы строк и | заменяются пробелами)
+# Событие в журнал. $1 - info|warn|error, $2 - текст (переводы строк и | заменяются пробелами).
+# То же событие чаще раза в минуту не пишется (спека §6.2 п.8): события последней минуты — в $GRKA_RUN/journal.recent.
+# Текст передаётся в awk через окружение: -v разобрал бы обратные косые черты
 journal() {
-	mkdir -p "$GRKA_LOGDIR"
+	_jt="$(printf '%s' "$2" | tr '\n|' '  ')"
+	_jn="$(now_ts)"
+	_jr="$GRKA_RUN/journal.recent"
+	if [ -f "$_jr" ] && JM="$1 $_jt" awk -v n="$_jn" '
+		n - $1 >= 0 && n - $1 < 60 && substr($0, index($0, " ") + 1) == ENVIRON["JM"] { f = 1 }
+		END { exit !f }' "$_jr"; then
+		return 0
+	fi
+	mkdir -p "$GRKA_LOGDIR" "$GRKA_RUN"
+	{
+		[ ! -f "$_jr" ] || awk -v n="$_jn" 'n - $1 >= 0 && n - $1 < 60' "$_jr"
+		printf '%s %s %s\n' "$_jn" "$1" "$_jt"
+	} > "$_jr.$$" && mv -f "$_jr.$$" "$_jr"
 	if [ -f "$JOURNAL_FILE" ] && [ "$(wc -c < "$JOURNAL_FILE")" -gt "$JOURNAL_MAX" ]; then
 		mv -f "$JOURNAL_FILE" "$JOURNAL_FILE.old"
 	fi
-	printf '%s|%s|%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$(printf '%s' "$2" | tr '\n|' '  ')" >> "$JOURNAL_FILE"
+	printf '%s|%s|%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$_jt" >> "$JOURNAL_FILE"
 }
 
 # stdin -> файл $1 атомарно. Пустой ввод не записывается: это защита от упавшего jq

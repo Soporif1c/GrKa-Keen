@@ -3,6 +3,14 @@
 . "$GRKA_SRC/lib/common.sh"
 . "$GRKA_SRC/lib/dnsredir.sh"
 
+test_dns_apply_failure_is_not_a_change() {
+	stub_fail "REDIRECT"
+	_o="$(dns_apply "192.168.1.90" 1053)"
+	_r=$?
+	assert_eq "" "$_o" "несработавшая команда — не изменение"
+	assert_eq 1 "$_r"
+}
+
 test_dns_apply_creates_chain_and_one_jump() {
 	assert_eq changed "$(dns_apply "192.168.1.90" 1053)"
 	assert_eq 2 "$(iptables -t nat -S GRKA_DNS | grep -c -- '^-A')"

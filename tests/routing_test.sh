@@ -92,6 +92,30 @@ test_tables_apply() {
 	assert_eq "unreachable default metric 4294967295" "$(ip route show table 1001)"
 }
 
+test_rt6_apply_failure_is_not_a_change() {
+	stub_fail "ip -6 rule add"
+	_o="$(rt6_apply 0xffffaab true)"
+	_r=$?
+	assert_eq "" "$_o" "несработавшая команда — не изменение"
+	assert_eq 1 "$_r"
+}
+
+test_rules_apply_failure_is_not_a_change() {
+	stub_fail "ip rule add"
+	_o="$(rt_rules_apply 0xffffaab false "")"
+	_r=$?
+	assert_eq "" "$_o"
+	assert_eq 1 "$_r"
+}
+
+test_tables_apply_failure_is_reported() {
+	stub_fail "unreachable"
+	_o="$(rt_tables_apply false)"
+	_r=$?
+	assert_eq "" "$_o"
+	assert_eq 1 "$_r"
+}
+
 test_rt6_apply_and_disable() {
 	assert_eq changed "$(rt6_apply 0xffffaab true)"
 	assert_eq "$(printf '99:\tfrom all fwmark 0xffffaab prohibit')" "$(ip -6 rule show)"

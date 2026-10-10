@@ -32,6 +32,18 @@ test_journal_flattens_newlines_and_pipes() {
 	assert_contains "$(cat "$JOURNAL_FILE")" "|warn|a b c"
 }
 
+test_journal_suppresses_repeat_within_minute() {
+	NOW=1000
+	now_ts() { echo "$NOW"; }
+	journal info "Правила восстановлены"
+	NOW=1030; journal info "Правила восстановлены"
+	assert_eq 1 "$(grep -c 'Правила восстановлены' "$JOURNAL_FILE")" "повтор того же события в пределах минуты не пишется"
+	NOW=1060; journal info "Правила восстановлены"
+	assert_eq 2 "$(grep -c 'Правила восстановлены' "$JOURNAL_FILE")" "через минуту повтор пишется"
+	journal info "Другое событие"
+	assert_eq 1 "$(grep -c 'Другое событие' "$JOURNAL_FILE")"
+}
+
 test_journal_rotates_over_limit() {
 	JOURNAL_MAX=50
 	journal info "1234567890123456789012345678901234567890"

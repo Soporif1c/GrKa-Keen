@@ -16,6 +16,15 @@ stubs_reset() {
 	for _sc in INPUT FORWARD OUTPUT; do : > "$STUB/ipt.filter.$_sc"; done
 }
 
+# Сбой команды: вызов, в строке которого есть один из шаблонов $STUB/fail, ничего не меняет и завершается ошибкой
+stub_fail() {
+	printf '%s\n' "$1" >> "$STUB/fail"
+}
+
+stub_failing() {
+	[ -s "$STUB/fail" ] && printf '%s\n' "$1" | grep -qF -f "$STUB/fail"
+}
+
 # ---------- ip ----------
 
 stub_rule_text() {
@@ -29,6 +38,7 @@ stub_rule_text() {
 
 ip() {
 	echo "ip $*" >> "$STUB/calls"
+	! stub_failing "ip $*" || return 2
 	_fam=4
 	if [ "$1" = "-6" ]; then
 		_fam=6
@@ -145,6 +155,7 @@ stub_link_down() {
 
 iptables() {
 	echo "iptables $*" >> "$STUB/calls"
+	! stub_failing "iptables $*" || return 1
 	_it=filter
 	while [ $# -gt 0 ]; do
 		case "$1" in
