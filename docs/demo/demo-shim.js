@@ -93,12 +93,14 @@
 	};
 
 	var STATUS = {
+		ok: true, state: 'ok', warnings: [], paused: false, enabled: true,
+		api_open: false, core_error: '', core_error_log: '',
 		running: true, pid: '9184', memory: '47616',
 		core_installed: true, core_version: 'v1.19.13', panel_version: '0.0.1',
 		autostart: true, config_exists: true, dashboard_installed: true, compact: false,
 		api_port: '9090', api_secret: '', arch: 'mipsle-softfloat',
 		policy: {
-			name: 'GrKa', found: true, mark: '0xffffaab', table: '1001',
+			name: 'GrKa', found: true, mark: '0xffffaab', table: '1001', rci: 'ok',
 			rule_ok: true, route_ok: true, tun: 'grka-tun', tun_up: true,
 			clients: ['Mac', 'Oculus', 'PC', 'Телевизор зал']
 		}
@@ -108,6 +110,7 @@
 		status: function() { return STATUS; },
 		get_config: function() { return { exists: true, content: CONFIG }; },
 		get_log: function() { return { log: LOG }; },
+		journal: function() { return { ok: true, entries: [] }; },
 		list_templates: function() {
 			return { templates: [
 				{ id: 'minimal', title: 'Минимальный (селектор «Весь трафик»: напрямую или через прокси)' },
@@ -118,7 +121,7 @@
 			return { backups: ['config-20260725-211358.yaml', 'config-20260725-205940.yaml', 'config-20260724-183122.yaml'] };
 		},
 		check_updates: function() {
-			return { core_current: 'v1.19.13', core_latest: 'v1.19.13', panel_current: '0.0.1', panel_latest: '0.0.1' };
+			return { core_current: 'v1.19.13', core_latest: 'v1.19.13', panel_current: '0.0.1', panel_latest: '0.0.1', panel_update: false };
 		},
 		check_config: function() { return { ok: true, output: 'configuration file ' + '/opt/etc/mihomo/config.yaml' + ' test is successful' }; },
 		task_status: function() { return { running: false, log: '' }; }

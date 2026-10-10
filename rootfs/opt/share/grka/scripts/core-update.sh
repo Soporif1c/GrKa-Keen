@@ -1,19 +1,20 @@
 #!/bin/sh
 # GrKa Keen - установка/обновление ядра mihomo с официального репозитория MetaCubeX/mihomo
+# Ядро перезапускает сторож: скрипт только заменяет бинарник и ставит флаг restart-core
+GRKA_SHARE="${GRKA_SHARE:-/opt/share/grka}"
+. "$GRKA_SHARE/lib/common.sh"
+. "$GRKA_SHARE/lib/settings.sh"
+. "$GRKA_SHARE/lib/core.sh"
 
-. /opt/share/grka/scripts/common.sh
-
-LOCK="/tmp/grka-task.lock"
-TMP_GZ="/opt/tmp/grka-mihomo.gz"
-TMP_BIN="/opt/tmp/grka-mihomo"
+TMP_GZ="$GRKA_TMPDIR/grka-mihomo.gz"
+TMP_BIN="$GRKA_TMPDIR/grka-mihomo"
 
 cleanup() {
-	rm -f "$LOCK" "$TMP_GZ" "$TMP_BIN"
+	rm -f "$TASK_LOCK" "$TMP_GZ" "$TMP_BIN"
 }
 trap cleanup EXIT
-echo $$ > "$LOCK"
-
-mkdir -p /opt/tmp
+mkdir -p "$GRKA_RUN" "$GRKA_TMPDIR"
+echo $$ > "$TASK_LOCK"
 
 VERSION="${1:-}"
 if [ -z "$VERSION" ]; then
@@ -41,23 +42,21 @@ chmod +x "$TMP_BIN"
 	exit 1
 }
 
-WAS_RUNNING="$(pidof mihomo 2>/dev/null || true)"
-[ -n "$WAS_RUNNING" ] && { echo "Остановка mihomo..."; /opt/etc/init.d/S97mihomo stop; }
-
+# mv заменяет файл, даже если старое ядро ещё работает: процесс держит старый inode
 if compact_on; then
-	echo "Компактный режим: ядро сохраняется сжатым ($CORE_GZ)"
-	cp "$TMP_GZ" "$CORE_GZ"
-	mkdir -p /tmp/grka
-	mv "$TMP_BIN" "$CORE_TMP"
-	chmod +x "$CORE_TMP"
-	rm -f "$CORE_BIN"
+	echo "Компактный режим: ядро сохраняется сжатым ($MIHOMO_GZ)"
+	cp "$TMP_GZ" "$MIHOMO_GZ"
+	mkdir -p "$(dirname "$MIHOMO_TMP")"
+	mv -f "$TMP_BIN" "$MIHOMO_TMP"
+	chmod +x "$MIHOMO_TMP"
+	rm -f "$MIHOMO_BIN"
 else
-	mv "$TMP_BIN" "$CORE_BIN"
-	chmod +x "$CORE_BIN"
-	rm -f "$CORE_GZ" "$CORE_TMP"
+	mv -f "$TMP_BIN" "$MIHOMO_BIN"
+	chmod +x "$MIHOMO_BIN"
+	rm -f "$MIHOMO_GZ" "$MIHOMO_TMP"
 fi
 
-[ -n "$WAS_RUNNING" ] && { echo "Запуск mihomo..."; /opt/etc/init.d/S97mihomo start force; }
-
+flag_set restart-core
+flag_set dirty
 echo ""
-echo "Готово: установлено ядро mihomo $VERSION ($ARCH)"
+echo "Готово: установлено ядро mihomo $VERSION ($ARCH). Сторож перезапустит ядро в течение секунды"

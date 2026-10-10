@@ -1,78 +1,135 @@
 #!/bin/sh
-# GrKa Keen - веб-панель (lighttpd, порт задаётся в /opt/etc/grka/lighttpd.conf)
+# GrKa Keen — веб-панель и сторож.
+#   start   — запустить (при первом запуске выполняет переход с 0.0.2)
+#   stop    — полная остановка: панель, сторож, ядро, правила маршрутизации
+#   restart — перезапуск только панели и сторожа; ядро продолжает работать (так обновляется панель)
 
 ENABLED=yes
 
-PATH="/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+GRKA_SHARE="${GRKA_SHARE:-/opt/share/grka}"
+. "$GRKA_SHARE/lib/common.sh"
+. "$GRKA_SHARE/lib/settings.sh"
 
-LCONF="/opt/etc/grka/lighttpd.conf"
-PIDFILE="/opt/var/run/grka-lighttpd.pid"
+LCONF="$GRKA_ETC/lighttpd.conf"
+LPID="${GRKA_LPID:-/opt/var/run/grka-lighttpd.pid}"
+LIGHTTPD="${GRKA_LIGHTTPD:-lighttpd}"
+WD_PIDFILE="$GRKA_RUN/watchdog.pid"
 
-get_pid() {
-	[ -f "$PIDFILE" ] && cat "$PIDFILE" 2>/dev/null
+# Конфиг lighttpd создаётся из settings.json при каждом запуске: порт переживает обновления
+gen_lighttpd_conf() {
+	_lp="$(settings_get panel_port)"
+	case "$_lp" in "" | *[!0-9]*) _lp=1100 ;; esac
+	if [ "$_lp" -lt 1 ] || [ "$_lp" -gt 65535 ]; then
+		_lp=1100
+	fi
+	write_atomic "$LCONF" <<EOF
+# GrKa Keen — файл создаётся автоматически из $SETTINGS_FILE при запуске, ручные правки пропадут
+server.port          = $_lp
+server.document-root = "$GRKA_SHARE/www"
+server.upload-dirs   = ( "$GRKA_TMPDIR" )
+server.errorlog      = "$GRKA_LOGDIR/lighttpd.log"
+server.pid-file      = "$LPID"
+server.modules       = ( "mod_cgi" )
+index-file.names     = ( "index.html" )
+mimetype.assign = (
+  ".html"  => "text/html; charset=utf-8",
+  ".js"    => "application/javascript; charset=utf-8",
+  ".css"   => "text/css; charset=utf-8",
+  ".json"  => "application/json; charset=utf-8",
+  ".png"   => "image/png",
+  ".svg"   => "image/svg+xml",
+  ".woff2" => "font/woff2",
+  ".ico"   => "image/x-icon"
+)
+\$HTTP["url"] =~ "^/cgi-bin/" {
+  cgi.assign = ( "" => "" )
+}
+EOF
 }
 
-is_running() {
-	local pid
-	pid="$(get_pid)"
-	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+wd_running() {
+	pid_alive "$(cat "$WD_PIDFILE" 2>/dev/null)" grka-watchdog
+}
+
+lighttpd_running() {
+	pid_alive "$(cat "$LPID" 2>/dev/null)" lighttpd
+}
+
+# $1 - PID, $2 - шаблон командной строки. TERM, 5 секунд, KILL
+stop_pid() {
+	pid_alive "$1" "$2" || return 0
+	kill "$1" 2>/dev/null
+	_si=0
+	while pid_alive "$1" "$2" && [ "$_si" -lt 5 ]; do
+		sleep 1
+		_si=$((_si + 1))
+	done
+	if pid_alive "$1" "$2"; then
+		kill -9 "$1" 2>/dev/null
+	fi
+	return 0
 }
 
 do_start() {
-	if [ "$ENABLED" != "yes" ] && [ "$1" != "force" ]; then
+	if [ "$ENABLED" != yes ] && [ "${1:-}" != force ]; then
 		echo "grka-keen: автозапуск отключён (ENABLED=no)"
 		return 0
 	fi
-	if is_running; then
-		echo "Веб-панель GrKa Keen уже запущена"
-		return 0
+	mkdir -p "$(dirname "$LPID")" "$GRKA_LOGDIR" "$GRKA_TMPDIR" "$GRKA_RUN" "$GRKA_ETC"
+	sh "$GRKA_SHARE/bin/grka" migrate >/dev/null 2>&1
+	# Сторож первым: маршрутизация VPN не должна зависеть от того, поднялась ли панель
+	if ! wd_running; then
+		spawn_bg /dev/null sh "$GRKA_SHARE/bin/grka-watchdog"
 	fi
-	command -v lighttpd >/dev/null 2>&1 || {
-		echo "lighttpd не найден. Установите: opkg install lighttpd lighttpd-mod-cgi"
-		return 1
-	}
-	mkdir -p /opt/var/run /opt/var/log/grka /opt/tmp
-	lighttpd -f "$LCONF" || return 1
-	echo "Веб-панель GrKa Keen запущена (порт из $LCONF)"
+	gen_lighttpd_conf
+	if ! lighttpd_running; then
+		if ! command -v "$LIGHTTPD" >/dev/null 2>&1; then
+			echo "Сторож запущен, но панели нет: lighttpd не найден. Установите: opkg install lighttpd lighttpd-mod-cgi"
+			return 1
+		fi
+		if ! "$LIGHTTPD" -f "$LCONF"; then
+			echo "Сторож запущен, но панель не запустилась. Подробности в $GRKA_LOGDIR/lighttpd.log"
+			return 1
+		fi
+	fi
+	echo "GrKa Keen запущен, панель на порту $(settings_get panel_port)"
+}
+
+do_stop_soft() {
+	stop_pid "$(cat "$WD_PIDFILE" 2>/dev/null)" grka-watchdog
+	rm -f "$WD_PIDFILE"
+	stop_pid "$(cat "$LPID" 2>/dev/null)" lighttpd
+	rm -f "$LPID"
 }
 
 do_stop() {
-	local pid
-	pid="$(get_pid)"
-	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-		kill "$pid" 2>/dev/null
-		sleep 1
-		kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
-		echo "Веб-панель GrKa Keen остановлена"
-	else
-		echo "Веб-панель GrKa Keen не запущена"
-	fi
-	rm -f "$PIDFILE"
+	do_stop_soft
+	sh "$GRKA_SHARE/bin/grka" shutdown >/dev/null 2>&1
+	echo "GrKa Keen остановлен"
 }
 
-case "$1" in
-start)
-	do_start "$2"
-	;;
-stop)
-	do_stop
-	;;
-restart)
-	do_stop
-	sleep 1
-	do_start force
-	;;
-status)
-	if is_running; then
-		echo "alive"
-		exit 0
-	else
-		echo "dead"
+init_main() {
+	case "${1:-}" in
+	start) do_start "${2:-}" ;;
+	stop) do_stop ;;
+	restart)
+		do_stop_soft
+		sleep 1
+		do_start force
+		;;
+	status)
+		if wd_running; then
+			echo alive
+			exit 0
+		fi
+		echo dead
 		exit 1
-	fi
-	;;
-*)
-	echo "Использование: $0 start [force] | stop | restart | status"
-	exit 1
-	;;
-esac
+		;;
+	*)
+		echo "Использование: $0 start | stop | restart | status"
+		exit 1
+		;;
+	esac
+}
+
+[ -n "${GRKA_INIT_NO_MAIN:-}" ] || init_main "$@"

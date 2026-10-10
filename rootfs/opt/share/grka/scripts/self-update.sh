@@ -1,33 +1,33 @@
 #!/bin/sh
 # GrKa Keen - самообновление панели с GitHub-релизов
 
-# Обновление перезапишет этот файл, поэтому перезапускаем себя из /tmp
-if [ "${GRKA_SELFUPDATE_COPY:-}" != "1" ]; then
+# Обновление перезапишет этот файл, поэтому работаем из копии в /tmp
+if [ "${GRKA_SELFUPDATE_COPY:-}" != 1 ]; then
 	cp "$0" /tmp/grka-self-update-run.sh
 	export GRKA_SELFUPDATE_COPY=1
 	exec sh /tmp/grka-self-update-run.sh "$@"
 fi
 
-. /opt/share/grka/scripts/common.sh
+GRKA_SHARE="${GRKA_SHARE:-/opt/share/grka}"
+. "$GRKA_SHARE/lib/common.sh"
 
-LOCK="/tmp/grka-task.lock"
-TMP_TAR="/opt/tmp/grka-panel.tar.gz"
+TMP_TAR="$GRKA_TMPDIR/grka-panel.tar.gz"
 
 cleanup() {
-	rm -f "$LOCK" "$TMP_TAR" /tmp/grka-self-update-run.sh
+	rm -f "$TASK_LOCK" "$TMP_TAR" /tmp/grka-self-update-run.sh
 }
 trap cleanup EXIT
-echo $$ > "$LOCK"
-
-mkdir -p /opt/tmp
+mkdir -p "$GRKA_RUN" "$GRKA_TMPDIR"
+echo $$ > "$TASK_LOCK"
 
 echo "Проверка последней версии GrKa Keen..."
 TAG="$(latest_tag "$GRKA_REPO")"
 [ -n "$TAG" ] || { echo "ОШИБКА: не удалось получить версию с GitHub API"; exit 1; }
 
-CUR="$(cat /opt/share/grka/version 2>/dev/null)"
-if [ "v$CUR" = "$TAG" ]; then
-	echo "Уже установлена последняя версия ($CUR)"
+CUR="$(cat "$GRKA_SHARE/version" 2>/dev/null)"
+# только вперёд: у альфы последний стабильный релиз старше, и «обновление» на него было бы откатом
+if ! ver_newer "$TAG" "$CUR"; then
+	echo "Обновлять нечего: установлена версия $CUR, последний релиз $TAG не новее"
 	exit 0
 fi
 
@@ -38,11 +38,11 @@ download "$URL" "$TMP_TAR" || { echo "ОШИБКА: не удалось скач
 
 echo "Установка..."
 tar -C / -xzf "$TMP_TAR" || { echo "ОШИБКА: не удалось распаковать архив"; exit 1; }
-chmod +x /opt/share/grka/scripts/*.sh /opt/share/grka/www/cgi-bin/api \
-	/opt/etc/init.d/S97mihomo /opt/etc/init.d/S99grka-keen \
-	/opt/etc/ndm/netfilter.d/50-grka.sh /opt/etc/ndm/ifstatechanged.d/50-grka.sh 2>/dev/null
+chmod +x "$GRKA_SHARE"/bin/* "$GRKA_SHARE"/scripts/*.sh "$GRKA_SHARE/www/cgi-bin/api" \
+	/opt/etc/init.d/S99grka-keen /opt/etc/ndm/netfilter.d/50-grka.sh /opt/etc/ndm/ifstatechanged.d/50-grka.sh 2>/dev/null
+sh "$GRKA_SHARE/bin/grka" migrate
 
-echo "Перезапуск веб-панели..."
+echo "Перезапуск веб-панели (ядро продолжает работать)..."
 /opt/etc/init.d/S99grka-keen restart >/dev/null 2>&1
 
 echo ""

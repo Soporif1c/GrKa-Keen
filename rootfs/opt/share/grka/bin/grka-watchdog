@@ -1,0 +1,11 @@
+#!/bin/sh
+# GrKa Keen — сторож. Запускается из /opt/etc/init.d/S99grka-keen и работает постоянно
+GRKA_SHARE="${GRKA_SHARE:-/opt/share/grka}"
+. "$GRKA_SHARE/lib/common.sh"
+. "$GRKA_SHARE/lib/settings.sh"
+. "$GRKA_SHARE/lib/rci.sh"
+. "$GRKA_SHARE/lib/routing.sh"
+. "$GRKA_SHARE/lib/dnsredir.sh"
+. "$GRKA_SHARE/lib/core.sh"
+. "$GRKA_SHARE/lib/watchdog.sh"
+wd_main

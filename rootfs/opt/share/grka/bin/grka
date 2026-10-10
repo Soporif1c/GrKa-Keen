@@ -1,0 +1,158 @@
+#!/bin/sh
+# GrKa Keen — команда для SSH.
+#   grka status | apply | pause | resume | start | stop | restart
+#   grka device <MAC> gaming|regular | logs [journal|core] [N] | diag | migrate | tick | shutdown
+GRKA_SHARE="${GRKA_SHARE:-/opt/share/grka}"
+. "$GRKA_SHARE/lib/common.sh"
+. "$GRKA_SHARE/lib/settings.sh"
+. "$GRKA_SHARE/lib/rci.sh"
+. "$GRKA_SHARE/lib/routing.sh"
+. "$GRKA_SHARE/lib/dnsredir.sh"
+. "$GRKA_SHARE/lib/core.sh"
+. "$GRKA_SHARE/lib/watchdog.sh"
+. "$GRKA_SHARE/lib/migrate.sh"
+
+DIAG_DIR="${DIAG_DIR:-/tmp}"
+
+grka_usage() {
+	cat <<'EOF'
+GrKa Keen — управление из SSH
+  grka status                      состояние сторожа, ядра и правил
+  grka apply                       попросить сторожа проверить правила сейчас
+  grka pause | resume              поставить VPN на паузу / снять паузу
+  grka start | stop | restart      запустить / остановить / перезапустить ядро
+  grka device <MAC> gaming|regular тип устройства
+  grka logs [journal|core] [N]     журнал сторожа или лог ядра
+  grka diag                        собрать файл для разбора проблемы
+EOF
+}
+
+grka_kick() {
+	flag_set dirty
+}
+
+grka_status() {
+	if [ ! -s "$STATUS_FILE" ]; then
+		echo "Сторож не запущен (нет $STATUS_FILE)"
+		return 1
+	fi
+	jqc -r '
+		"Состояние: \(.state // "?")",
+		"Ядро: \(.core.name // "?"), " + (if .core.running then "запущено (PID \(.core.pid))" else "не запущено" end)
+			+ (if (.core.error // "") != "" then ". Ошибка: \(.core.error)" else "" end),
+		"Политика «\(.policy.name // "?")»: " + (if .policy.found then "найдена, метка \(.policy.mark)" else "не найдена" end)
+			+ " (RCI: \(.policy.rci // "?"))",
+		"Правила: " + (if .routing.rules_ok then "на месте" else "не применены" end)
+			+ ", TUN \(.routing.tun // "?") " + (if .routing.tun_up then "поднят" else "не поднят" end),
+		"Игровые устройства: " + ([(.policy.hosts // [])[] | select(.type == "gaming") | "\(.name) (\(.ip))"]
+			| if length == 0 then "нет" else join(", ") end),
+		"Пауза: " + (if .paused then "да" else "нет" end),
+		((.warnings // [])[] | "Внимание: \(.)")' "$STATUS_FILE"
+}
+
+grka_device() {
+	case "${2:-}" in
+	gaming | regular) ;;
+	*)
+		echo "Использование: grka device <MAC> gaming|regular"
+		return 1
+		;;
+	esac
+	if ! state_set_device "$1" "$2"; then
+		echo "Неверный MAC: $1"
+		return 1
+	fi
+	grka_kick
+	if [ "$2" = gaming ]; then echo "Готово: $1 — игровое"; else echo "Готово: $1 — обычное"; fi
+}
+
+grka_logs() {
+	_ln="${2:-100}"
+	case "$_ln" in "" | *[!0-9]*) _ln=100 ;; esac
+	case "${1:-journal}" in
+	core) tail -n "$_ln" "$CORE_LOG" 2>/dev/null ;;
+	*) tail -n "$_ln" "$JOURNAL_FILE" 2>/dev/null ;;
+	esac
+}
+
+# Файл для разбора проблемы. Токен скрыт, у MAC видны только первые три байта
+grka_diag() {
+	_df="$DIAG_DIR/grka-diag-$(date +%Y%m%d-%H%M%S).txt"
+	{
+		echo "== версия"; cat "$GRKA_SHARE/version" 2>/dev/null; echo; uname -a 2>/dev/null
+		echo "== статус"; cat "$STATUS_FILE" 2>/dev/null; echo
+		echo "== настройки"; jqc '.rci_token |= (if . == "" then "" else "***" end)' "$SETTINGS_FILE" 2>/dev/null
+		echo "== state"; cat "$STATE_FILE" 2>/dev/null
+		echo "== ip rule"; ip rule show 2>&1
+		echo "== ip -6 rule"; ip -6 rule show 2>&1
+		echo "== таблица 1001"; ip route show table 1001 2>&1
+		echo "== таблица 1002"; ip route show table 1002 2>&1
+		echo "== iptables nat"; iptables -t nat -S 2>&1
+		echo "== iptables mangle"; iptables -t mangle -S 2>&1
+		echo "== iptables FORWARD"; iptables -S FORWARD 2>&1
+		echo "== ip6tables mangle"; ip6tables -t mangle -S 2>&1
+		echo "== rp_filter"
+		for _rp in "$GRKA_PROC"/sys/net/ipv4/conf/*/rp_filter; do
+			[ -f "$_rp" ] && echo "$_rp: $(cat "$_rp")"
+		done
+		echo "== RCI show/ip/policy"; rci_get show/ip/policy 2>&1
+		echo; echo "== журнал"; tail -n 200 "$JOURNAL_FILE" 2>/dev/null
+		echo "== лог ядра"; tail -n 200 "$CORE_LOG" 2>/dev/null
+	} 2>&1 | sed -E 's/(([0-9a-fA-F]{2}:){3})([0-9a-fA-F]{2}:){2}[0-9a-fA-F]{2}/\1**:**:**/g' > "$_df"
+	echo "$_df"
+}
+
+# Полная остановка: ядро выключено, все правила сняты
+grka_shutdown() {
+	core_stop
+	# shellcheck disable=SC2034
+	RT_TUN="$(core_tun)"
+	rt_clear
+	dns_clear >/dev/null
+	journal info "GrKa Keen остановлен: ядро выключено, правила сняты"
+}
+
+grka_main() {
+	_cmd="${1:-help}"
+	[ $# -gt 0 ] && shift
+	case "$_cmd" in
+	status) grka_status ;;
+	apply)
+		flag_set rci-refresh
+		grka_kick
+		echo "Сторож проверит правила в течение секунды"
+		;;
+	pause)
+		state_set paused true && journal info "VPN поставлен на паузу" && grka_kick && echo "VPN на паузе"
+		;;
+	resume)
+		state_set paused false && journal info "Пауза снята" && grka_kick && echo "Пауза снята"
+		;;
+	start)
+		rm -f "$GRKA_RUN/hold"
+		state_set enabled true && flag_set start-core && grka_kick && echo "Ядро будет запущено"
+		;;
+	stop)
+		state_set enabled false && grka_kick && echo "Ядро будет остановлено"
+		;;
+	restart)
+		flag_set restart-core
+		grka_kick
+		echo "Ядро будет перезапущено"
+		;;
+	device) grka_device "$@" ;;
+	logs) grka_logs "$@" ;;
+	diag) grka_diag ;;
+	migrate) migrate_run ;;
+	tick)
+		settings_init
+		state_init
+		wd_tick
+		grka_status
+		;;
+	shutdown) grka_shutdown ;;
+	*) grka_usage ;;
+	esac
+}
+
+[ -n "${GRKA_CLI_NO_MAIN:-}" ] || grka_main "$@"
