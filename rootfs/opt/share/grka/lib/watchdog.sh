@@ -20,6 +20,7 @@ wd_load() {
 	WD_APPLIED=""
 	WD_RULES_OK=false
 	WD_TUN_UP=false
+	WD_DNS_PORT=""
 	# shellcheck disable=SC1090
 	[ ! -f "$WD_ENV" ] || . "$WD_ENV"
 	WD_CORE_ERROR="$(cat "$GRKA_RUN/core.error.title" 2>/dev/null)"
@@ -248,10 +249,11 @@ wd_routes() {
 	[ "$_v6" = false ] || _v6=true
 	_rch="$(rt_rules_apply "$WD_MARK" "$1" "$WD_GAMING_IPS")$(rt_tables_apply "$WD_TUN_UP")$(rt6_apply "$WD_MARK" "$_v6")"
 	rt_rpfilter
-	_dport="$(settings_get dns_port)"
-	case "$_dport" in "" | *[!0-9]*) _dport=1053 ;; esac
-	if [ "$WD_TUN_UP" = true ] && [ "$1" != true ]; then
-		_dch="$(dns_apply "$WD_GAMING_IPS" "$_dport")"
+	# порт берём из конфига ядра: если DNS-слушателя нет, перенаправление оставило бы игровые устройства без DNS
+	WD_DNS_PORT="$(core_dns_port)"
+	case "$WD_DNS_PORT" in *[!0-9]*) WD_DNS_PORT="" ;; esac
+	if [ "$WD_TUN_UP" = true ] && [ "$1" != true ] && [ -n "$WD_DNS_PORT" ]; then
+		_dch="$(dns_apply "$WD_GAMING_IPS" "$WD_DNS_PORT")"
 	else
 		_dch="$(dns_clear)"
 	fi
@@ -289,6 +291,9 @@ wd_warnings() {
 		[ "$WD_RCI_STATE" != auth ] || echo "Нужен токен RCI: KeeneticOS 5.2 и новее не отвечают без него. Создайте токен в Keenetic (Пользователи и доступ) и укажите его в настройках панели"
 		[ "$WD_RCI_STATE" != nopolicy ] || echo "Политика «$(settings_get policy_name)» не найдена. Создайте её в Keenetic: Приоритеты подключений, Политики доступа в интернет"
 		[ "$WD_RCI_STATE" != down ] || echo "RCI роутера не отвечает"
+		if [ -n "$WD_GAMING_IPS" ] && [ -n "$WD_MARK" ] && [ -z "${WD_DNS_PORT:-}" ]; then
+			echo "У игровых устройств VPN по доменам не работает: в конфиге ядра нет DNS-слушателя (dns.listen). Их DNS идёт через роутер напрямую"
+		fi
 		if ls "$GRKA_INITD"/S*xkeen* >/dev/null 2>&1; then
 			echo "Установлен XKeen. Он конфликтует с GrKa Keen: остановите или удалите его"
 		fi

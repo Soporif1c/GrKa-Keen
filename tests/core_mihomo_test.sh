@@ -80,6 +80,18 @@ test_core_validate_reports_not_installed() {
 	assert_contains "$_o" "не установлено"
 }
 
+test_core_dns_port_variants() {
+	settings_init
+	printf 'dns:\n  enable: true\n  listen: 0.0.0.0:1053\n  ipv6: false\ntun:\n  device: grka-tun\n' > "$MIHOMO_DIR/config.yaml"
+	assert_eq 1053 "$(core_dns_port)"
+	printf "dns: { enable: true, listen: '[::]:5353' }\n" > "$MIHOMO_DIR/config.yaml"
+	assert_eq 5353 "$(core_dns_port)"
+	printf 'dns:\n  enable: false\n  listen: 0.0.0.0:1053\n' > "$MIHOMO_DIR/config.yaml"
+	assert_eq "" "$(core_dns_port)"
+	printf 'mixed-port: 7890\n' > "$MIHOMO_DIR/config.yaml"
+	assert_eq "" "$(core_dns_port)"
+}
+
 test_core_api_port_and_secret() {
 	settings_init
 	printf "external-controller: 0.0.0.0:9191\nsecret: 'abc'\n" > "$MIHOMO_DIR/config.yaml"

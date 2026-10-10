@@ -151,6 +151,28 @@ core_tun() {
 	echo "${_td:-Meta}"
 }
 
+# Порт DNS-слушателя ядра (dns.listen) или пусто, если DNS ядра выключен или не задан.
+# Без слушателя DNS игровых устройств перенаправлять нельзя: они останутся без DNS
+core_dns_port() {
+	_dcf="$(core_config)"
+	[ -f "$_dcf" ] || return 0
+	awk '
+		/^dns:[[:space:]]*\{/ {
+			if ($0 ~ /enable:[[:space:]]*false/) exit
+			if (match($0, /listen:[[:space:]]*[^,}[:space:]]+/)) {
+				v = substr($0, RSTART, RLENGTH); sub(/listen:[[:space:]]*/, "", v); gsub(/["\047]/, "", v)
+				n = split(v, a, ":"); port = a[n]
+			}
+			exit
+		}
+		/^dns:/ { indns = 1; next }
+		indns && /^[^[:space:]#]/ { exit }
+		indns && /^[[:space:]]+enable:[[:space:]]*false/ { off = 1 }
+		indns && /^[[:space:]]+listen:/ { v = $2; gsub(/["\047]/, "", v); n = split(v, a, ":"); port = a[n] }
+		END { if (!off && port ~ /^[0-9]+$/) print port }
+	' "$_dcf"
+}
+
 # Ротация лога ядра: копия + обнуление. Ядро пишет с O_APPEND и продолжит писать в тот же файл
 core_log_rotate() {
 	[ -f "$CORE_LOG" ] || return 0

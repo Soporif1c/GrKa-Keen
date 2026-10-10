@@ -17,6 +17,7 @@ fake_core() {
 	core_config_sig() { cat "$T/core.sig" 2>/dev/null; }
 	core_tun() { echo grka-tun; }
 	core_pid() { echo 4242; }
+	core_dns_port() { printf '%s' "${FAKE_DNS_PORT-1053}"; }
 	sleep() { :; }
 	NOW=1000
 	now_ts() { echo "$NOW"; }
@@ -191,6 +192,26 @@ test_tick_gaming_ips_skip_offline_and_broken() {
 	assert_contains "$(ip rule show)" "$(printf '97:\tfrom 192.168.1.90 fwmark 0xffffaab lookup 1002')"
 	assert_contains "$(ip rule show)" "$(printf '98:\tfrom 192.168.1.90 fwmark 0xffffaab lookup main')"
 	assert_eq 2 "$(iptables -t nat -S GRKA_DNS | grep -c -- '^-A')"
+}
+
+test_tick_gaming_without_core_dns_listener_skips_redirect() {
+	fake_core
+	base_rci_ok
+	FAKE_DNS_PORT=""
+	state_set_device aa:bb:cc:00:00:01 gaming
+	wd_tick
+	assert_eq "" "$(iptables -t nat -S GRKA_DNS 2>/dev/null)"
+	assert_contains "$(st '.warnings | join(" ")')" "dns.listen"
+	assert_contains "$(ip rule show)" "lookup 1002"
+}
+
+test_tick_gaming_dns_uses_core_port() {
+	fake_core
+	base_rci_ok
+	FAKE_DNS_PORT=5353
+	state_set_device aa:bb:cc:00:00:01 gaming
+	wd_tick
+	assert_contains "$(iptables -t nat -S GRKA_DNS)" "--to-ports 5353"
 }
 
 test_tick_disabled_stops_core_keeps_capture() {
