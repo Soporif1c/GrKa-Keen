@@ -48,6 +48,41 @@ test_tick_starts_core_and_applies_full_rules() {
 	assert_contains "$(cat "$JOURNAL_FILE")" "Правила маршрутизации применены"
 }
 
+test_tick_first_pass_sets_kill_switch_before_core_start() {
+	fake_core
+	base_rci_ok
+	core_start() {
+		ip rule show > "$T/rules_at_start"
+		ip route show table 1001 > "$T/t1001_at_start"
+		echo start >> "$T/core.calls"; : > "$T/core.up"; stub_link_up grka-tun; return 0
+	}
+	wd_tick
+	assert_contains "$(cat "$T/rules_at_start")" "fwmark 0xffffaab lookup 1001" "правило 99 стоит до запуска ядра"
+	assert_contains "$(cat "$T/t1001_at_start")" "unreachable default" "пока ядро стартует, трафик политики не уходит мимо VPN"
+	assert_contains "$(ip route show table 1001)" "default dev grka-tun"
+	assert_eq 1 "$(grep -c 'Правила маршрутизации' "$JOURNAL_FILE")" "одно «применены», без ложного «восстановлены»"
+}
+
+test_routes_table_before_rule() {
+	fake_core
+	base_rci_ok
+	wd_tick
+	_tl="$(grep -n 'ip route replace unreachable' "$STUB/calls" | head -n 1 | cut -d: -f1)"
+	_rl="$(grep -n 'ip rule add.*lookup 1001' "$STUB/calls" | head -n 1 | cut -d: -f1)"
+	assert_eq yes "$(if [ "${_tl:-99999}" -lt "${_rl:-0}" ]; then echo yes; else echo no; fi)" "маршрут unreachable появляется раньше правила 99"
+}
+
+test_tick_watchdog_restart_is_quiet() {
+	fake_core
+	base_rci_ok
+	state_set_device aa:bb:cc:00:00:01 gaming
+	wd_tick
+	rm -f "$WD_ENV"
+	NOW=1010; wd_tick
+	assert_eq 1 "$(grep -c 'Правила маршрутизации' "$JOURNAL_FILE")" "перезапуск сторожа при работающем ядре правила не трогает"
+	assert_eq 1 "$(grep -c 'Перенаправление DNS' "$JOURNAL_FILE")"
+}
+
 test_tick_policy_appears_after_boot() {
 	fake_core
 	settings_init

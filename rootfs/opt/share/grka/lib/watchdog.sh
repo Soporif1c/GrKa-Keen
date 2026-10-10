@@ -279,13 +279,18 @@ wd_routes() {
 		WD_TUN_UP=false
 		return 0
 	fi
+	_ptun="$WD_TUN_UP"
 	WD_TUN_UP=false
 	if [ "$2" = true ] && ip link show "$RT_TUN" >/dev/null 2>&1; then
 		WD_TUN_UP=true
 	fi
 	_v6="$(settings_get ipv6_block)"
 	[ "$_v6" = false ] || _v6=true
-	_rch="$(rt_rules_apply "$WD_MARK" "$1" "$WD_GAMING_IPS")$(rt_tables_apply "$WD_TUN_UP")$(rt6_apply "$WD_MARK" "$_v6")"
+	# таблицы раньше правил: правило 99 не должно появиться, пока в таблице 1001 нет маршрута
+	_tch="$(rt_tables_apply "$WD_TUN_UP")"
+	_rch="$(rt_rules_apply "$WD_MARK" "$1" "$WD_GAMING_IPS")$(rt6_apply "$WD_MARK" "$_v6")"
+	# маршрут через TUN появляется и пропадает вместе с ядром: это не ремонт, о ядре пишет wd_core
+	[ "$_ptun" != "$WD_TUN_UP" ] || _rch="$_rch$_tch"
 	rt_rpfilter
 	# порт берём из конфига ядра: если DNS-слушателя нет, перенаправление оставило бы игровые устройства без DNS
 	WD_DNS_PORT="$(core_dns_port)"
@@ -398,6 +403,13 @@ wd_tick() {
 	WD_GAMING_IPS="$(wd_gaming_ips)"
 	if [ "$_prev_ips" != "$WD_GAMING_IPS" ] && [ -n "$WD_APPLIED" ]; then
 		journal info "Адреса игровых устройств: ${WD_GAMING_IPS:-нет}"
+	fi
+	# Первый проход (загрузка, перезапуск сторожа): правила и unreachable ставятся до проверки и запуска ядра,
+	# иначе эти до 35 секунд трафик политики шёл бы по маршрутам самого Keenetic, мимо VPN
+	if [ -n "$WD_MARK" ] && [ "$WD_RULES_OK" != true ]; then
+		_run=false
+		if core_running; then _run=true; fi
+		wd_routes "$_pa" "$_run"
 	fi
 	wd_core "$_en" "$_now"
 	core_log_rotate
