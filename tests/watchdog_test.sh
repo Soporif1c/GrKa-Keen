@@ -251,6 +251,25 @@ test_tick_gaming_ips_skip_offline_and_broken() {
 	assert_eq 2 "$(iptables -t nat -S GRKA_DNS | grep -c -- '^-A')"
 }
 
+test_tick_gaming_ips_only_online_and_valid() {
+	fake_core
+	base_rci_ok
+	cat > "$T/hotspot2.json" <<'EOF'
+{"host":[
+ {"mac":"aa:bb:cc:00:00:01","ip":"192.168.1.90","name":"PS5","policy":"Policy0","active":true},
+ {"mac":"aa:bb:cc:00:00:06","ip":"192.168.1.91","name":"Xbox","policy":"Policy0","active":false},
+ {"mac":"aa:bb:cc:00:00:07","ip":"0.0.0.0","name":"Switch","policy":"Policy0","active":true},
+ {"mac":"aa:bb:cc:00:00:08","ip":"999.1.1.1","name":"Deck","policy":"Policy0","active":true}
+]}
+EOF
+	stub_rci show/ip/hotspot 200 "$T/hotspot2.json"
+	for _m in 01 06 07 08; do state_set_device "aa:bb:cc:00:00:$_m" gaming; done
+	wd_tick
+	assert_eq "192.168.1.90" "$(st '.routing.gaming_ips | join(" ")')" "только устройство в сети и с правильным IP"
+	assert_not_contains "$(ip rule show)" "192.168.1.91" "IP отключённой консоли может достаться обычному устройству"
+	assert_not_contains "$(iptables -t nat -S GRKA_DNS)" "192.168.1.91"
+}
+
 test_tick_gaming_without_core_dns_listener_skips_redirect() {
 	fake_core
 	base_rci_ok

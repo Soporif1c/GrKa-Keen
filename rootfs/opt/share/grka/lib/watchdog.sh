@@ -131,13 +131,17 @@ wd_rci_refresh() {
 	WD_LAST_RCI="$_rnow"
 }
 
-# IP игровых устройств политики (из последнего ответа RCI), только правильные IPv4
+# IP игровых устройств политики, которые сейчас в сети (из последнего ответа RCI).
+# Отключённое устройство пропускается: его старый IP DHCP может отдать обычному устройству,
+# и то пошло бы мимо VPN. Адрес проверяется так же строго, как в маршрутизации
 wd_gaming_ips() {
 	[ -s "$HOSTS_FILE" ] || return 0
 	jqc -r --slurpfile st "$STATE_FILE" '
 		($st[0].devices // {}) as $d
-		| .[] | select(($d[.mac].type // "") == "gaming") | .ip
-		| select(test("\\A[0-9]{1,3}(\\.[0-9]{1,3}){3}\\z"))' "$HOSTS_FILE" 2>/dev/null | sort -u | tr '\n' ' ' | sed 's/ *$//'
+		| .[] | select(($d[.mac].type // "") == "gaming" and .active == true) | .ip' "$HOSTS_FILE" 2>/dev/null |
+		sort -u | while IFS= read -r _gi; do
+			if [ "$_gi" != 0.0.0.0 ] && rt_ipv4_ok "$_gi"; then printf '%s ' "$_gi"; fi
+		done | sed 's/ *$//'
 }
 
 wd_wait_tun() {
