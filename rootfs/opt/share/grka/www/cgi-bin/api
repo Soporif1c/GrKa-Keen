@@ -25,8 +25,33 @@ deny() {
 	exit 0
 }
 
+# Имя, по которому открыта панель. IP-литералы, localhost и my.keenetic.net разрешены всегда:
+# их нельзя «перепривязать» через DNS (DNS rebinding). Другие имена — только из настройки allowed_hosts
+host_allowed() {
+	_ha="$1"
+	case "$_ha" in
+	\[*\]*)
+		_ha="${_ha#\[}"
+		_ha="${_ha%%\]*}"
+		case "$_ha" in "" | *[!0-9a-fA-F:.]*) return 1 ;; esac
+		return 0
+		;;
+	esac
+	_ha="${_ha%:*}"
+	[ -n "$_ha" ] || return 1
+	case "$_ha" in
+	*[!0-9.]*) ;;
+	*) return 0 ;;
+	esac
+	_ha="$(printf '%s' "$_ha" | tr 'A-Z' 'a-z')"
+	case "$_ha" in
+	localhost | my.keenetic.net) return 0 ;;
+	esac
+	jqc -e --arg h "$_ha" '(.allowed_hosts // []) | any(. == $h)' "$SETTINGS_FILE" >/dev/null 2>&1
+}
+
 # Защита от CSRF: чужой сайт не может послать такой запрос без предварительной проверки CORS,
-# а её lighttpd не пропускает. Origin сверяется дополнительно
+# а её lighttpd не пропускает. Проверка Host закрывает DNS rebinding, Origin сверяется дополнительно
 csrf_check() {
 	[ "${REQUEST_METHOD:-}" = POST ] || deny "Нужен POST-запрос"
 	case "${CONTENT_TYPE:-}" in
@@ -34,9 +59,16 @@ csrf_check() {
 	*) deny "Нужен Content-Type: application/json" ;;
 	esac
 	[ "${HTTP_X_GRKA_REQUEST:-}" = 1 ] || deny "Запрос пришёл не из панели GrKa Keen"
+	host_allowed "${HTTP_HOST:-}" || deny "Панель открыта по незнакомому имени. Откройте её по IP-адресу роутера или добавьте имя в настройку allowed_hosts"
 	if [ -n "${HTTP_ORIGIN:-}" ]; then
 		_oh="${HTTP_ORIGIN#*://}"
-		[ "$_oh" = "${HTTP_HOST:-}" ] || [ "$_oh" = "${HTTP_X_FORWARDED_HOST:-}" ] || deny "Запрос с чужого сайта отклонён"
+		if [ "$_oh" = "${HTTP_HOST:-}" ]; then
+			:
+		elif [ -n "${HTTP_X_FORWARDED_HOST:-}" ] && [ "$_oh" = "$HTTP_X_FORWARDED_HOST" ] && host_allowed "$HTTP_X_FORWARDED_HOST"; then
+			:
+		else
+			deny "Запрос с чужого сайта отклонён"
+		fi
 	fi
 }
 
@@ -358,14 +390,16 @@ m_settings_set() {
 		  (if has("rci_token") then (.rci_token | if type == "string" and length <= 512 and test("\\A[A-Za-z0-9._~+/=-]*\\z") then empty else "Токен RCI: только латиница, цифры и символы ._~+/=-" end) else empty end),
 		  (if has("panel_port") then (.panel_port | if type == "number" and . == floor and . >= 1024 and . <= 65535 then empty else "Порт панели: число от 1024 до 65535" end) else empty end),
 		  (if has("autostart") then (.autostart | if type == "boolean" then empty else "Автозапуск: да или нет" end) else empty end),
-		  (if has("ipv6_block") then (.ipv6_block | if type == "boolean" then empty else "Блокировка IPv6: да или нет" end) else empty end)
+		  (if has("ipv6_block") then (.ipv6_block | if type == "boolean" then empty else "Блокировка IPv6: да или нет" end) else empty end),
+		  (if has("allowed_hosts") then (.allowed_hosts | if type == "array" and length <= 20 and all(.[]; type == "string" and test("\\A[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\\z")) then empty else "Разрешённые имена панели: список доменных имён (до 20)" end) else empty end)
 		] | join("; ")')"
 	if [ -n "$_errs" ]; then
 		err "$_errs"
 		return
 	fi
 	lock_acquire config || { sleep 1; lock_acquire config; } || { err "Настройки заняты, повторите"; return; }
-	jqc --argjson p "$_p" '. + ($p | with_entries(select(.key | IN("policy_name", "rci_token", "panel_port", "autostart", "ipv6_block"))))' "$SETTINGS_FILE" | write_atomic "$SETTINGS_FILE"
+	jqc --argjson p "$_p" '. + ($p | with_entries(select(.key | IN("policy_name", "rci_token", "panel_port", "autostart", "ipv6_block", "allowed_hosts")))
+		| if has("allowed_hosts") then .allowed_hosts |= map(ascii_downcase) else . end)' "$SETTINGS_FILE" | write_atomic "$SETTINGS_FILE"
 	_r=$?
 	lock_release config
 	if [ $_r -ne 0 ]; then

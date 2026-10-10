@@ -55,8 +55,44 @@ test_csrf_allows_same_origin_and_forwarded_host() {
 	state_init
 	H_ORIGIN="http://192.168.1.1:1100" cgi_call '{"method":"status"}'
 	assert_eq 200 "$CGI_STATUS"
+	settings_set allowed_hosts '["home.keenetic.pro"]'
 	H_ORIGIN="https://home.keenetic.pro" H_FWD="home.keenetic.pro" cgi_call '{"method":"status"}'
 	assert_eq 200 "$CGI_STATUS"
+}
+
+test_csrf_rejects_dns_rebinding_host() {
+	settings_init
+	H_HOST="evil.example:1100" H_ORIGIN="http://evil.example:1100" cgi_call '{"method":"status"}'
+	assert_eq 403 "$CGI_STATUS"
+	H_HOST="evil.example:1100" cgi_call '{"method":"status"}'
+	assert_eq 403 "$CGI_STATUS"
+}
+
+test_csrf_rejects_forged_forwarded_host() {
+	settings_init
+	H_HOST="192.168.1.1:1100" H_ORIGIN="http://evil.example" H_FWD="evil.example" cgi_call '{"method":"status"}'
+	assert_eq 403 "$CGI_STATUS"
+}
+
+test_csrf_allows_known_names_and_ip_literals() {
+	settings_init
+	state_init
+	H_HOST="my.keenetic.net:1100" H_ORIGIN="http://my.keenetic.net:1100" cgi_call '{"method":"status"}'
+	assert_eq 200 "$CGI_STATUS"
+	H_HOST="[fe80::1]:1100" cgi_call '{"method":"status"}'
+	assert_eq 200 "$CGI_STATUS"
+	settings_set allowed_hosts '["router.home"]'
+	H_HOST="Router.Home:1100" H_ORIGIN="http://Router.Home:1100" cgi_call '{"method":"status"}'
+	assert_eq 200 "$CGI_STATUS"
+}
+
+test_settings_set_allowed_hosts_validated() {
+	settings_init
+	cgi_call '{"method":"settings.set","params":{"allowed_hosts":["home.keenetic.pro","bad host"]}}'
+	assert_eq false "$(body .ok)"
+	cgi_call '{"method":"settings.set","params":{"allowed_hosts":["Home.Keenetic.Pro"]}}'
+	assert_eq true "$(body .ok)"
+	assert_eq "home.keenetic.pro" "$(settings_get 'allowed_hosts[0]')"
 }
 
 test_status_without_watchdog_is_down() {

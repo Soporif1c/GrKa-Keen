@@ -2,7 +2,7 @@
 # Настройки панели (settings.json) и выбор пользователя (state.json).
 # Запись атомарная и под блокировкой "config": CGI, CLI и сторож могут писать одновременно.
 
-SETTINGS_DEFAULTS='{"schema":1,"policy_name":"GrKa","rci_token":"","panel_port":1100,"autostart":true,"core":"mihomo","expert":{"mihomo":"","xray":""},"log_level":"warning","ipv6_block":true,"dns_port":1053}'
+SETTINGS_DEFAULTS='{"schema":1,"policy_name":"GrKa","rci_token":"","panel_port":1100,"autostart":true,"core":"mihomo","expert":{"mihomo":"","xray":""},"log_level":"warning","ipv6_block":true,"dns_port":1053,"allowed_hosts":[]}'
 STATE_DEFAULTS='{"schema":1,"enabled":true,"paused":false,"devices":{}}'
 
 # Создаёт файл $1 со значениями по умолчанию $2 или дописывает недостающие ключи. Битый файл -> .broken
