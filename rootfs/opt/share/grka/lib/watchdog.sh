@@ -103,7 +103,8 @@ wd_rci_refresh() {
 	3)
 		WD_RCI_TRIES=$((WD_RCI_TRIES + 1))
 		[ "${WD_NOPOLICY_SINCE:-0}" -gt 0 ] || WD_NOPOLICY_SINCE="$_rnow"
-		if [ -n "$WD_MARK" ] && [ $((_rnow - WD_NOPOLICY_SINCE)) -lt 30 ]; then
+		_gone=$((_rnow - WD_NOPOLICY_SINCE))
+		if [ -n "$WD_MARK" ] && [ "$_gone" -lt 30 ]; then
 			# NDM может на миг отдать список без политики, пока перенастраивает политики.
 			# Правила держим 30 секунд: пока политики нет, её метку никто не ставит, правила ничему не мешают.
 			# Состояние recheck не равно ok, поэтому RCI спросим снова на следующем проходе
@@ -113,7 +114,8 @@ wd_rci_refresh() {
 			WD_RCI_STATE=nopolicy
 			WD_MARK=""
 			WD_POLICY_ID=""
-			rm -f "$CACHE_DIR/policy_mark"
+			# сохранённую метку забываем, только если политики нет дольше 30 секунд: она нужна, когда RCI не отвечает
+			[ "$_gone" -lt 30 ] || rm -f "$CACHE_DIR/policy_mark"
 		fi
 		;;
 	*)

@@ -130,6 +130,19 @@ test_tick_policy_deleted_clears_rules_after_30s() {
 	assert_eq 1 "$(grep -c 'не найдена в Keenetic' "$JOURNAL_FILE")"
 }
 
+test_tick_policy_missing_at_boot_keeps_cached_mark() {
+	fake_core
+	settings_init
+	state_init
+	mkdir -p "$CACHE_DIR"
+	echo "Policy0 0xffffaab" > "$CACHE_DIR/policy_mark"
+	echo '{}' > "$T/empty.json"
+	stub_rci show/ip/policy 200 "$T/empty.json"
+	wd_tick
+	assert_eq waiting_policy "$(st .state)"
+	assert_file_exists "$CACHE_DIR/policy_mark" "один ответ без политики при загрузке не стирает сохранённую метку"
+}
+
 test_tick_core_crash_backoff_and_stop() {
 	fake_core
 	base_rci_ok
