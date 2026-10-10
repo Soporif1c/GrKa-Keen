@@ -170,6 +170,24 @@ test_tick_core_crash_backoff_and_stop() {
 	assert_not_contains "$(ip route show table 1001)" "dev grka-tun"
 }
 
+test_tick_start_flag_retries_after_crash_loop() {
+	fake_core
+	base_rci_ok
+	wd_tick
+	for _t in 1010:1016 1020:1036 1040:1101; do
+		rm -f "$T/core.up"; stub_link_down grka-tun
+		NOW=${_t%:*}; wd_tick
+		NOW=${_t#*:}; wd_tick
+	done
+	rm -f "$T/core.up"; stub_link_down grka-tun
+	NOW=1110; wd_tick
+	assert_eq error "$(st .state)"
+	flag_set start-core
+	NOW=1120; wd_tick
+	assert_eq 5 "$(grep -c start "$T/core.calls")" "«Запустить» после череды падений — новая попытка сразу"
+	assert_eq ok "$(st .state)"
+}
+
 test_tick_bad_config_no_loop_until_changed() {
 	fake_core
 	base_rci_ok

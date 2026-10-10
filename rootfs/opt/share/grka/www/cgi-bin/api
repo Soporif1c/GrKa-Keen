@@ -196,7 +196,7 @@ m_service() {
 	case "$(jq_body '.params.action // empty')" in
 	start)
 		rm -f "$GRKA_RUN/hold"
-		{ state_set enabled true && flag_set dirty && ok_msg "Ядро запускается"; } || err "Не удалось сохранить"
+		{ state_set enabled true && flag_set start-core && flag_set dirty && ok_msg "Ядро запускается"; } || err "Не удалось сохранить"
 		;;
 	stop)
 		{ state_set enabled false && flag_set dirty && ok_msg "Ядро останавливается"; } || err "Не удалось сохранить"

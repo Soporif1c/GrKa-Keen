@@ -202,6 +202,12 @@ wd_core() {
 		WD_CORE_NEXT=0
 		journal info "Перезапуск ядра по запросу"
 	fi
+	if flag_take start-core; then
+		# «Запустить» после ошибки или череды падений — новая попытка сразу (спека §6.2 п.3: «по кнопке»)
+		WD_CORE_ERROR=""
+		WD_CORE_FAILS=0
+		WD_CORE_NEXT=0
+	fi
 	if core_running; then
 		[ -n "$WD_CORE_UP_SINCE" ] || WD_CORE_UP_SINCE="$2"
 		return 0

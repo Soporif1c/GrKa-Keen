@@ -28,6 +28,13 @@ test_pause_resume() {
 	assert_eq false "$(state_get paused)"
 }
 
+test_start_requests_retry() {
+	settings_init
+	state_init
+	grka_main start >/dev/null
+	assert_file_exists "$GRKA_RUN/start-core" "grka start после ошибки ядра — новая попытка"
+}
+
 test_start_stop_restart() {
 	settings_init
 	state_init

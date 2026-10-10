@@ -130,7 +130,7 @@ grka_main() {
 		;;
 	start)
 		rm -f "$GRKA_RUN/hold"
-		state_set enabled true && grka_kick && echo "Ядро будет запущено"
+		state_set enabled true && flag_set start-core && grka_kick && echo "Ядро будет запущено"
 		;;
 	stop)
 		state_set enabled false && grka_kick && echo "Ядро будет остановлено"

@@ -185,6 +185,13 @@ test_service_actions_map_to_state_and_flags() {
 	assert_eq true "$(state_get paused)"
 }
 
+test_service_start_requests_retry() {
+	settings_init
+	state_init
+	cgi_call '{"method":"service","params":{"action":"start"}}'
+	assert_file_exists "$GRKA_RUN/start-core" "после ошибки ядра «Запустить» должно давать новую попытку"
+}
+
 test_journal_returns_newest_first() {
 	settings_init
 	journal info "первое"
