@@ -11,6 +11,7 @@ wd_load() {
 	WD_RCI_STATE=init
 	WD_RCI_TRIES=0
 	WD_LAST_RCI=0
+	WD_NOPOLICY_SINCE=0
 	WD_GAMING_IPS=""
 	WD_CORE_FAILS=0
 	WD_CORE_FIRST_FAIL=0
@@ -36,6 +37,7 @@ wd_save() {
 		echo "WD_RCI_STATE='$WD_RCI_STATE'"
 		echo "WD_RCI_TRIES='$WD_RCI_TRIES'"
 		echo "WD_LAST_RCI='$WD_LAST_RCI'"
+		echo "WD_NOPOLICY_SINCE='$WD_NOPOLICY_SINCE'"
 		echo "WD_GAMING_IPS='$WD_GAMING_IPS'"
 		echo "WD_CORE_FAILS='$WD_CORE_FAILS'"
 		echo "WD_CORE_FIRST_FAIL='$WD_CORE_FIRST_FAIL'"
@@ -66,15 +68,17 @@ wd_mark_from_cache() {
 # $1 - имя политики
 wd_rci_refresh() {
 	_prev="$WD_RCI_STATE"
+	_rnow="$(now_ts)"
 	_res="$(rci_policy_lookup "$1")"
 	_rc=$?
 	case $_rc in
 	0)
 		_id="$(printf '%s' "${_res%% *}" | tr -cd 'A-Za-z0-9_-')"
 		_mk="${_res#* }"
+		WD_NOPOLICY_SINCE=0
 		if [ -n "$WD_MARK" ] && [ "$WD_MARK" != "$_mk" ]; then
 			journal info "Метка политики «$1» сменилась: $WD_MARK → $_mk"
-		elif [ "$_prev" != ok ]; then
+		elif [ "$_prev" != ok ] && [ "$_prev" != recheck ]; then
 			if [ "$WD_RCI_TRIES" -gt 0 ]; then
 				journal info "Политика «$1» найдена (метка $_mk), попыток: $((WD_RCI_TRIES + 1))"
 			else
@@ -97,11 +101,20 @@ wd_rci_refresh() {
 		wd_mark_from_cache
 		;;
 	3)
-		[ "$_prev" = nopolicy ] || journal warn "Политика «$1» не найдена в Keenetic"
-		WD_RCI_STATE=nopolicy
 		WD_RCI_TRIES=$((WD_RCI_TRIES + 1))
-		WD_MARK=""
-		WD_POLICY_ID=""
+		[ "${WD_NOPOLICY_SINCE:-0}" -gt 0 ] || WD_NOPOLICY_SINCE="$_rnow"
+		if [ -n "$WD_MARK" ] && [ $((_rnow - WD_NOPOLICY_SINCE)) -lt 30 ]; then
+			# NDM может на миг отдать список без политики, пока перенастраивает политики.
+			# Правила держим 30 секунд: пока политики нет, её метку никто не ставит, правила ничему не мешают.
+			# Состояние recheck не равно ok, поэтому RCI спросим снова на следующем проходе
+			WD_RCI_STATE=recheck
+		else
+			[ "$_prev" = nopolicy ] || journal warn "Политика «$1» не найдена в Keenetic"
+			WD_RCI_STATE=nopolicy
+			WD_MARK=""
+			WD_POLICY_ID=""
+			rm -f "$CACHE_DIR/policy_mark"
+		fi
 		;;
 	*)
 		if wd_mark_from_cache; then
@@ -113,7 +126,7 @@ wd_rci_refresh() {
 		WD_RCI_TRIES=$((WD_RCI_TRIES + 1))
 		;;
 	esac
-	WD_LAST_RCI="$(now_ts)"
+	WD_LAST_RCI="$_rnow"
 }
 
 # IP игровых устройств политики (из последнего ответа RCI), только правильные IPv4

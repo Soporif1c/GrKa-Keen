@@ -101,6 +101,35 @@ test_tick_mark_change_replaces_rules() {
 	assert_contains "$(cat "$JOURNAL_FILE")" "сменилась"
 }
 
+test_tick_policy_missing_briefly_keeps_rules() {
+	fake_core
+	base_rci_ok
+	wd_tick
+	echo '{}' > "$T/empty.json"
+	stub_rci_seq show/ip/policy "200 $T/empty.json" "200 $T/empty.json" "200 $FIXTURES/policy.json"
+	NOW=1061; wd_tick
+	NOW=1071; wd_tick
+	assert_contains "$(ip rule show)" "fwmark 0xffffaab lookup 1001" "политика пропала меньше чем на 30 с — правила на месте"
+	NOW=1081; wd_tick
+	assert_eq ok "$(st .state)"
+	assert_eq 1 "$(grep -c 'найдена' "$JOURNAL_FILE")" "кратковременный пропуск политики в журнал не пишется"
+}
+
+test_tick_policy_deleted_clears_rules_after_30s() {
+	fake_core
+	base_rci_ok
+	wd_tick
+	echo '{}' > "$T/empty.json"
+	stub_rci show/ip/policy 200 "$T/empty.json"
+	NOW=1061; wd_tick
+	assert_contains "$(ip rule show)" "fwmark 0xffffaab lookup 1001"
+	NOW=1091; wd_tick
+	assert_eq "" "$(ip rule show)"
+	assert_eq waiting_policy "$(st .state)"
+	assert_file_missing "$CACHE_DIR/policy_mark" "метка удалённой политики забывается"
+	assert_eq 1 "$(grep -c 'не найдена в Keenetic' "$JOURNAL_FILE")"
+}
+
 test_tick_core_crash_backoff_and_stop() {
 	fake_core
 	base_rci_ok
