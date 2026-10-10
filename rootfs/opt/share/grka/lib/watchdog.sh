@@ -17,6 +17,8 @@ wd_load() {
 	WD_CORE_NEXT=0
 	WD_CORE_UP_SINCE=""
 	WD_CORE_CFG_SIG=""
+	WD_CORE_ERROR_KIND=""
+	WD_CORE_ERROR_TS=0
 	WD_APPLIED=""
 	WD_RULES_OK=false
 	WD_TUN_UP=false
@@ -40,6 +42,8 @@ wd_save() {
 		echo "WD_CORE_NEXT='$WD_CORE_NEXT'"
 		echo "WD_CORE_UP_SINCE='$WD_CORE_UP_SINCE'"
 		echo "WD_CORE_CFG_SIG='$WD_CORE_CFG_SIG'"
+		echo "WD_CORE_ERROR_KIND='$WD_CORE_ERROR_KIND'"
+		echo "WD_CORE_ERROR_TS='$WD_CORE_ERROR_TS'"
 		echo "WD_APPLIED='$WD_APPLIED'"
 		echo "WD_RULES_OK='$WD_RULES_OK'"
 		echo "WD_TUN_UP='$WD_TUN_UP'"
@@ -144,6 +148,8 @@ wd_core_failed() {
 	3) _wd=60 ;;
 	*)
 		WD_CORE_ERROR="Ядро $(core_name) падает раз за разом"
+		WD_CORE_ERROR_KIND=crash
+		WD_CORE_ERROR_TS="$1"
 		WD_CORE_CFG_SIG="$(core_config_sig)"
 		tail -n 5 "$CORE_LOG" 2>/dev/null | write_atomic "$GRKA_RUN/core.error"
 		journal error "Ядро упало $WD_CORE_FAILS раза за 5 минут, повторы остановлены. Смотрите лог ядра"
@@ -186,26 +192,31 @@ wd_core() {
 		wd_core_failed "$2" "Ядро $(core_name) упало"
 	fi
 	if [ -n "$WD_CORE_ERROR" ]; then
-		[ "$(core_config_sig)" != "$WD_CORE_CFG_SIG" ] || return 0
-		journal info "Конфиг изменился, пробую запустить ядро снова"
-		WD_CORE_ERROR=""
-		WD_CORE_FAILS=0
-		WD_CORE_NEXT=0
+		if [ "$(core_config_sig)" != "$WD_CORE_CFG_SIG" ]; then
+			journal info "Конфиг изменился, пробую запустить ядро снова"
+			WD_CORE_ERROR=""
+			WD_CORE_FAILS=0
+			WD_CORE_NEXT=0
+		elif [ "$WD_CORE_ERROR_KIND" != crash ] && [ $(($2 - ${WD_CORE_ERROR_TS:-0})) -ge 300 ]; then
+			# раз в 5 минут перепроверяем: при загрузке проверка может не пройти из-за временного сбоя
+			:
+		else
+			return 0
+		fi
 	fi
 	[ "$2" -ge "${WD_CORE_NEXT:-0}" ] || return 0
 	_vo="$(core_validate "$(core_config)")"
 	_vr=$?
 	if [ $_vr -ne 0 ]; then
-		WD_CORE_CFG_SIG="$(core_config_sig)"
 		if [ $_vr -eq 3 ]; then
-			WD_CORE_ERROR="Ядро $(core_name) не установлено"
+			wd_core_error "$2" missing "Ядро $(core_name) не установлено"
 		else
-			WD_CORE_ERROR="Конфиг ядра не прошёл проверку"
+			wd_core_error "$2" validate "Конфиг ядра не прошёл проверку"
 		fi
 		printf '%s\n' "$_vo" | tail -n 5 | write_atomic "$GRKA_RUN/core.error"
-		journal error "$WD_CORE_ERROR"
 		return 0
 	fi
+	WD_CORE_ERROR=""
 	core_start
 	case $? in
 	0)
@@ -216,17 +227,19 @@ wd_core() {
 			journal warn "Ядро $(core_name) запущено, но TUN $RT_TUN не появился за 30 секунд"
 		fi
 		;;
-	3)
-		WD_CORE_ERROR="Ядро $(core_name) не установлено"
-		WD_CORE_CFG_SIG="$(core_config_sig)"
-		journal error "$WD_CORE_ERROR"
-		;;
-	*)
-		WD_CORE_ERROR="Нет конфига ядра: $(core_config)"
-		WD_CORE_CFG_SIG="$(core_config_sig)"
-		journal error "$WD_CORE_ERROR"
-		;;
+	3) wd_core_error "$2" missing "Ядро $(core_name) не установлено" ;;
+	*) wd_core_error "$2" noconfig "Нет конфига ядра: $(core_config)" ;;
 	esac
+}
+
+# Ошибка запуска ядра. $1 - время, $2 - вид (validate|missing|noconfig), $3 - текст.
+# Повтор той же ошибки при перепроверке в журнал не пишется
+wd_core_error() {
+	[ "$3" = "$WD_CORE_ERROR" ] || journal error "$3"
+	WD_CORE_ERROR="$3"
+	WD_CORE_ERROR_KIND="$2"
+	WD_CORE_ERROR_TS="$1"
+	WD_CORE_CFG_SIG="$(core_config_sig)"
 }
 
 # $1 - пауза (true/false), $2 - работает ли ядро (true/false)

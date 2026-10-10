@@ -147,6 +147,21 @@ test_tick_bad_config_no_loop_until_changed() {
 	assert_eq ok "$(st .state)"
 }
 
+test_tick_bad_config_rechecked_every_5_minutes() {
+	fake_core
+	base_rci_ok
+	: > "$T/core.badcfg"
+	echo sig1 > "$T/core.sig"
+	wd_tick
+	rm -f "$T/core.badcfg"
+	NOW=1200; wd_tick
+	assert_file_missing "$T/core.calls" "раньше 5 минут повторной проверки нет"
+	NOW=1301; wd_tick
+	assert_eq start "$(cat "$T/core.calls")"
+	assert_eq ok "$(st .state)"
+	assert_eq 1 "$(grep -c 'не прошёл проверку' "$JOURNAL_FILE")"
+}
+
 test_tick_core_not_installed_reports_once() {
 	fake_core
 	base_rci_ok
