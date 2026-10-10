@@ -2,7 +2,7 @@
 # Сборка релизного архива grka-keen-<version>.tar.gz из rootfs/
 set -e
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 VERSION="$(tr -d ' \r\n' < rootfs/opt/share/grka/version)"
 OUT="grka-keen-$VERSION.tar.gz"
 

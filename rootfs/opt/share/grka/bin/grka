@@ -105,6 +105,7 @@ grka_diag() {
 # Полная остановка: ядро выключено, все правила сняты
 grka_shutdown() {
 	core_stop
+	# shellcheck disable=SC2034
 	RT_TUN="$(core_tun)"
 	rt_clear
 	dns_clear >/dev/null

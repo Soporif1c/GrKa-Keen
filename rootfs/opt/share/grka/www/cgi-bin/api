@@ -150,8 +150,7 @@ m_status() {
 	_cok=$?
 	compact_on
 	_cmp=$?
-	[ -f "$MIHOMO_DIR/ui/index.html" ]
-	_dash=$?
+	if [ -f "$MIHOMO_DIR/ui/index.html" ]; then _dash=0; else _dash=1; fi
 	_sec="$(core_api_secret)"
 	_port="$(core_api_port)"
 	_open=false

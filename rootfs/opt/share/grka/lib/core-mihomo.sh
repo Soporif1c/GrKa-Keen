@@ -107,6 +107,7 @@ core_start() {
 	[ -f "$_sc" ] || return 4
 	mkdir -p "$GRKA_RUN"
 	core_log_rotate
+	# shellcheck disable=SC3045
 	ulimit -n 65536 2>/dev/null
 	echo "$(date '+%Y-%m-%d %H:%M:%S') [grka] запуск mihomo" >> "$CORE_LOG"
 	spawn_bg "$CORE_LOG" "$_sb" -d "$MIHOMO_DIR" -f "$_sc"
