@@ -1,0 +1,7 @@
+{"host":[
+ {"mac":"AA:BB:CC:00:00:01","ip":"192.168.1.90","name":"PlayStation 5","policy":"Policy0","active":true},
+ {"mac":"aa:bb:cc:00:00:02","ip":"192.168.1.37","name":"","hostname":"macbook","policy":"Policy0","link":"up"},
+ {"mac":"aa:bb:cc:00:00:03","ip":"","name":"Телевизор","policy":"Policy0","active":false},
+ {"mac":"aa:bb:cc:00:00:04","ip":"192.168.1.50","name":"Чужой","policy":"Policy1","active":true},
+ {"mac":"aa:bb:cc:00:00:05","ip":"999.1.1.1x","name":"Битый","policy":"Policy0","active":true}
+]}
