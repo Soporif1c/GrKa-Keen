@@ -77,7 +77,7 @@ rci_policy_hosts() {
 		[(.host // [])[]
 		 | select((.policy // "") == $p)
 		 | {mac: ((.mac // "") | ascii_downcase),
-		    ip: ((.ip // "") | if test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$") then . else "" end),
+		    ip: ((.ip // "") | if test("\\A[0-9]{1,3}(\\.[0-9]{1,3}){3}\\z") then . else "" end),
 		    name: (([.name, .hostname, .mac] | map(select(. != null and . != "")) | first) // ""),
 		    active: (if has("active") then ((.active | tostring) as $a | $a == "true" or $a == "yes" or $a == "1")
 		             else ((.link // "") == "up") end)}]'

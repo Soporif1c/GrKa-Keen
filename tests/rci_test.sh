@@ -82,4 +82,11 @@ test_policy_hosts_filters_and_normalizes() {
 	assert_eq "" "$(printf '%s' "$_h" | jqt -r '.[3].ip')"
 }
 
+test_policy_hosts_rejects_ip_with_trailing_newline() {
+	settings_init
+	printf '%s' '{"host":[{"mac":"aa:bb:cc:00:00:09","ip":"192.168.1.99\n","name":"X","policy":"Policy0","active":true}]}' > "$T/hs.json"
+	stub_rci show/ip/hotspot 200 "$T/hs.json"
+	assert_eq "" "$(rci_policy_hosts Policy0 | jqt -r '.[0].ip')"
+}
+
 run_tests "$0"

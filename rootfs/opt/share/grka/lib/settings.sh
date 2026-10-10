@@ -64,29 +64,29 @@ policy_name_valid() {
 	jqc -n -e --arg s "$1" '($s | length) <= 64 and ($s | explode | all(. >= 32 and . != 127))' >/dev/null 2>&1
 }
 
-# MAC -> нижний регистр. Неверный MAC -> код 1
+# MAC -> нижний регистр. Неверный MAC -> код 1.
+# Проверка через case по всей строке: grep сверял бы каждую строку отдельно и пропустил бы "MAC\nмусор"
 mac_normalize() {
 	_mn="$(printf '%s' "$1" | tr 'A-F' 'a-f')"
-	printf '%s' "$_mn" | grep -qE '^([0-9a-f]{2}:){5}[0-9a-f]{2}$' || return 1
+	case "$_mn" in
+	[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) ;;
+	*) return 1 ;;
+	esac
 	printf '%s\n' "$_mn"
 }
 
 # Тип устройства. $1 - MAC, $2 - gaming|regular (regular удаляет запись)
+# MAC передаётся в jq только через --arg: данные никогда не попадают в текст программы jq
 state_set_device() {
 	_dm="$(mac_normalize "$1")" || return 1
 	case "$2" in
-	gaming)
-		json_set "$STATE_FILE" ".devices[\"$_dm\"]" '{"type":"gaming"}'
-		;;
-	regular)
-		lock_acquire config || { sleep 1; lock_acquire config; } || return 1
-		jqc --arg m "$_dm" 'del(.devices[$m])' "$STATE_FILE" | write_atomic "$STATE_FILE"
-		_jr=$?
-		lock_release config
-		return $_jr
-		;;
-	*)
-		return 1
-		;;
+	gaming) _df='.devices[$m] = {type: "gaming"}' ;;
+	regular) _df='del(.devices[$m])' ;;
+	*) return 1 ;;
 	esac
+	lock_acquire config || { sleep 1; lock_acquire config; } || return 1
+	jqc --arg m "$_dm" "$_df" "$STATE_FILE" | write_atomic "$STATE_FILE"
+	_jr=$?
+	lock_release config
+	return $_jr
 }

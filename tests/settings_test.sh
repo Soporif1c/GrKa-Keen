@@ -60,6 +60,15 @@ test_state_set_device_rejects_garbage() {
 	assert_eq "{}" "$(jqt -c .devices "$STATE_FILE")"
 }
 
+test_mac_with_newline_is_rejected_and_state_untouched() {
+	state_init
+	_mac="$(printf 'aa:bb:cc:00:00:01\n"] | .pwned = true | .devices["x')"
+	if mac_normalize "$_mac" >/dev/null; then fail "MAC с переводом строки прошёл проверку"; fi
+	if state_set_device "$_mac" gaming; then fail "state_set_device принял многострочный MAC"; fi
+	assert_not_contains "$(cat "$STATE_FILE")" "pwned"
+	assert_eq "{}" "$(jqt -c .devices "$STATE_FILE")"
+}
+
 test_policy_name_valid() {
 	policy_name_valid "GrKa" || fail "GrKa"
 	policy_name_valid "Мой VPN" || fail "кириллица"
