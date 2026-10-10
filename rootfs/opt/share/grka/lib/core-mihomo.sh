@@ -115,9 +115,11 @@ core_start() {
 	return 0
 }
 
-# Остановка по PID (не killall: рядом может работать чужой mihomo). 10 секунд на TERM, потом KILL
+# Остановка по PID (не killall: рядом может работать чужой mihomo). 10 секунд на TERM, потом KILL.
+# Без PID-файла ядро ищется по /proc, иначе оно осталось бы работать после «Стоп»
 core_stop() {
 	_kp="$(core_pid)"
+	pid_alive "$_kp" mihomo || _kp="$(core_find_pid)"
 	if pid_alive "$_kp" mihomo; then
 		kill "$_kp" 2>/dev/null
 		_ki=0

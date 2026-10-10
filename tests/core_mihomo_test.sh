@@ -57,6 +57,16 @@ test_core_stop_terminates_then_kills() {
 	assert_file_missing "$CORE_PIDFILE"
 }
 
+test_core_stop_without_pidfile_finds_core_in_proc() {
+	mkdir -p "$GRKA_PROC/1234"
+	printf '/opt/sbin/mihomo\000-d\000%s\000-f\000x.yaml\000' "$MIHOMO_DIR" > "$GRKA_PROC/1234/cmdline"
+	pid_alive() { [ "$1" = 1234 ] && [ ! -f "$T/dead" ]; }
+	kill() { echo "kill $*" >> "$T/kills"; : > "$T/dead"; return 0; }
+	sleep() { :; }
+	core_stop
+	assert_eq "kill 1234" "$(cat "$T/kills" 2>/dev/null)" "PID-файла нет — ядро находится по /proc"
+}
+
 test_core_log_rotate_copytruncate() {
 	CORE_LOG_MAX=10
 	printf '0123456789abcdef' > "$CORE_LOG"
