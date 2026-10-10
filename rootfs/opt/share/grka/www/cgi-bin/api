@@ -1,305 +1,453 @@
 #!/bin/sh
-# GrKa Keen - CGI-бэкенд веб-панели.
-# Протокол: POST /cgi-bin/api с JSON {"method": "...", "params": {...}} -> JSON-ответ.
+# GrKa Keen — CGI-бэкенд панели.
+# Запрос: POST, Content-Type: application/json, заголовок X-GrKa-Request: 1,
+# тело {"method": "...", "params": {...}}. Ответ — JSON.
+# Маршрутами и ядром CGI не управляет: пишет настройки и ставит флаги, остальное делает сторож.
 
-PATH="/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+GRKA_SHARE="${GRKA_SHARE:-/opt/share/grka}"
+. "$GRKA_SHARE/lib/common.sh"
+. "$GRKA_SHARE/lib/settings.sh"
+. "$GRKA_SHARE/lib/core.sh"
 
-. /opt/share/grka/scripts/common.sh
-
-SCRIPTS="/opt/share/grka/scripts"
-TEMPLATE_DIR="/opt/share/grka/templates"
-MIHOMO_DIR="/opt/etc/mihomo"
-CONFIG_FILE="$MIHOMO_DIR/config.yaml"
+SCRIPTS="$GRKA_SHARE/scripts"
+TEMPLATE_DIR="$GRKA_SHARE/templates"
 BACKUP_DIR="$MIHOMO_DIR/backups"
-VERSION_FILE="/opt/share/grka/version"
-GRKA_CONF="/opt/etc/grka/grka.conf"
-INIT_MIHOMO="/opt/etc/init.d/S97mihomo"
-LOG_FILE="/opt/var/log/grka/mihomo.log"
-TASK_LOG="/tmp/grka-task.log"
-TASK_LOCK="/tmp/grka-task.lock"
+VERSION_FILE="$GRKA_SHARE/version"
 MAX_BACKUPS=10
 
-printf 'Status: 200\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
+http_reply() {
+	printf 'Status: %s\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n\r\n' "$1"
+}
+
+deny() {
+	http_reply "403 Forbidden"
+	jqc -n --arg e "$1" '{ok: false, error: $e, code: "forbidden"}'
+	exit 0
+}
+
+# Защита от CSRF: чужой сайт не может послать такой запрос без предварительной проверки CORS,
+# а её lighttpd не пропускает. Origin сверяется дополнительно
+csrf_check() {
+	[ "${REQUEST_METHOD:-}" = POST ] || deny "Нужен POST-запрос"
+	case "${CONTENT_TYPE:-}" in
+	application/json*) ;;
+	*) deny "Нужен Content-Type: application/json" ;;
+	esac
+	[ "${HTTP_X_GRKA_REQUEST:-}" = 1 ] || deny "Запрос пришёл не из панели GrKa Keen"
+	if [ -n "${HTTP_ORIGIN:-}" ]; then
+		_oh="${HTTP_ORIGIN#*://}"
+		[ "$_oh" = "${HTTP_HOST:-}" ] || [ "$_oh" = "${HTTP_X_FORWARDED_HOST:-}" ] || deny "Запрос с чужого сайта отклонён"
+	fi
+}
+
+csrf_check
+mkdir -p "$GRKA_RUN"
 
 BODY=""
-[ -n "$CONTENT_LENGTH" ] && [ "$CONTENT_LENGTH" -gt 0 ] 2>/dev/null && BODY="$(head -c "$CONTENT_LENGTH")"
+case "${CONTENT_LENGTH:-}" in
+"" | *[!0-9]*) ;;
+*) [ "$CONTENT_LENGTH" -gt 0 ] && BODY="$(head -c "$CONTENT_LENGTH")" ;;
+esac
 [ -n "$BODY" ] || BODY='{}'
 
 jq_body() {
-	printf '%s' "$BODY" | jq -r "$1" 2>/dev/null
+	printf '%s' "$BODY" | jqc -r "$1" 2>/dev/null
 }
 
 METHOD="$(jq_body '.method // empty')"
 
-core_version() {
-	local b
-	b="$(core_bin)"
-	[ -n "$b" ] || return 0
-	"$b" -v 2>/dev/null | head -n1 | awk '{print $3}'
+http_reply "200 OK"
+
+err() {
+	jqc -n --arg e "$1" '{ok: false, error: $e}'
 }
 
-panel_version() {
-	cat "$VERSION_FILE" 2>/dev/null
+ok_msg() {
+	jqc -n --arg m "${1:-}" '{ok: true, message: $m}'
+}
+
+bool() {
+	if [ "$1" -eq 0 ] 2>/dev/null; then echo true; else echo false; fi
 }
 
 task_running() {
 	[ -f "$TASK_LOCK" ] || return 1
-	local pid
-	pid="$(cat "$TASK_LOCK" 2>/dev/null)"
-	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+	_tp="$(cat "$TASK_LOCK" 2>/dev/null)"
+	[ -n "$_tp" ] && kill -0 "$_tp" 2>/dev/null
 }
 
 run_task() {
 	if task_running; then
-		jq -n '{started: false, error: "Другая задача ещё выполняется, дождитесь её завершения"}'
+		jqc -n '{started: false, error: "Другая задача ещё выполняется, дождитесь её завершения"}'
 		return
 	fi
 	: > "$TASK_LOG"
-	detach "$TASK_LOG" sh "$@"
-	echo $! > "$TASK_LOCK"
-	jq -n '{started: true}'
+	spawn_bg "$TASK_LOG" sh "$@"
+	echo "$SPAWN_PID" > "$TASK_LOCK"
+	jqc -n '{started: true}'
 }
 
 make_backup() {
-	[ -f "$CONFIG_FILE" ] || return 0
+	_cfg="$(core_config)"
+	[ -f "$_cfg" ] || return 0
 	mkdir -p "$BACKUP_DIR"
-	cp "$CONFIG_FILE" "$BACKUP_DIR/config-$(date +%Y%m%d-%H%M%S).yaml"
-	ls -1t "$BACKUP_DIR"/config-*.yaml 2>/dev/null | tail -n +"$((MAX_BACKUPS + 1))" | while read -r f; do
-		rm -f "$f"
+	cp "$_cfg" "$BACKUP_DIR/config-$(date +%Y%m%d-%H%M%S).yaml"
+	ls -1t "$BACKUP_DIR"/config-*.yaml 2>/dev/null | tail -n +"$((MAX_BACKUPS + 1))" | while read -r _bf; do
+		rm -f "$_bf"
 	done
 }
 
-bool() {
-	# $1 - shell-условие уже вычислено кодом возврата: bool <код>
-	[ "$1" -eq 0 ] 2>/dev/null && echo true || echo false
+cached_arch() {
+	_ca="$(cat "$GRKA_RUN/arch" 2>/dev/null)"
+	if [ -z "$_ca" ]; then
+		_ca="$(mihomo_arch)"
+		echo "$_ca" > "$GRKA_RUN/arch"
+	fi
+	echo "$_ca"
 }
 
-case "$METHOD" in
-
-status)
-	PID="$(pidof mihomo 2>/dev/null | awk '{print $1}')"
-	MEM=""
-	[ -n "$PID" ] && MEM="$(awk '/VmRSS/ {print $2}' "/proc/$PID/status" 2>/dev/null)"
-	API_PORT="$(sed -n "s/^external-controller:.*:\([0-9]\{1,\}\).*/\1/p" "$CONFIG_FILE" 2>/dev/null | head -n1)"
-	API_SECRET="$(sed -n "s/^secret:[[:space:]]*[\"']\{0,1\}\([^\"']*\)[\"']\{0,1\}[[:space:]]*$/\1/p" "$CONFIG_FILE" 2>/dev/null | head -n1)"
-
-	core_ready; CORE_OK=$?
-	[ -n "$PID" ]; RUNNING=$?
-	grep -q '^ENABLED=yes' "$INIT_MIHOMO" 2>/dev/null; AUTOSTART=$?
-	[ -f "$CONFIG_FILE" ]; CFG=$?
-	[ -f "$MIHOMO_DIR/ui/index.html" ]; DASH=$?
-	compact_on; COMPACT=$?
-
-	# Состояние политики Keenetic
-	P_NAME="GrKa"; P_FOUND=0; P_MARK=""; P_TABLE=""; P_RULE=0; P_ROUTE=0; P_TUN=""; P_TUN_UP=0
-	eval "$(sh "$SCRIPTS/policy-route.sh" status 2>/dev/null)"
-	CLIENTS="$(sh "$SCRIPTS/policy-route.sh" clients 2>/dev/null | jq -Rn '[inputs]' 2>/dev/null)"
-	[ -n "$CLIENTS" ] || CLIENTS='[]'
-
-	jq -n \
-		--argjson running "$(bool $RUNNING)" \
-		--arg pid "$PID" \
-		--arg memory "$MEM" \
-		--argjson core_installed "$(bool $CORE_OK)" \
+m_status() {
+	_st="$(cat "$STATUS_FILE" 2>/dev/null)"
+	if [ -z "$_st" ] || ! printf '%s' "$_st" | jqc -e 'type == "object"' >/dev/null 2>&1; then
+		_st='{}'
+	fi
+	_wd=false
+	if pid_alive "$(cat "$GRKA_RUN/watchdog.pid" 2>/dev/null)" grka-watchdog; then _wd=true; fi
+	_cfg="$(core_config)"
+	core_ready
+	_cok=$?
+	compact_on
+	_cmp=$?
+	[ -f "$MIHOMO_DIR/ui/index.html" ]
+	_dash=$?
+	_sec="$(core_api_secret)"
+	_port="$(core_api_port)"
+	_open=false
+	if grep -q '^external-controller:' "$_cfg" 2>/dev/null && [ -z "$_sec" ]; then _open=true; fi
+	_auto=true
+	[ "$(settings_get autostart)" != false ] || _auto=false
+	_cex=false
+	[ ! -f "$_cfg" ] || _cex=true
+	printf '%s' "$_st" | jqc \
+		--argjson watchdog "$_wd" \
+		--argjson core_installed "$(bool $_cok)" \
 		--arg core_version "$(core_version)" \
-		--arg panel_version "$(panel_version)" \
-		--argjson autostart "$(bool $AUTOSTART)" \
-		--argjson config_exists "$(bool $CFG)" \
-		--argjson dashboard_installed "$(bool $DASH)" \
-		--argjson compact "$(bool $COMPACT)" \
-		--arg api_port "${API_PORT:-9090}" \
-		--arg api_secret "$API_SECRET" \
-		--arg arch "$(mihomo_arch)" \
-		--arg p_name "$P_NAME" \
-		--argjson p_found "$([ "$P_FOUND" = "1" ] && echo true || echo false)" \
-		--arg p_mark "$P_MARK" \
-		--arg p_table "$P_TABLE" \
-		--argjson p_rule "$([ "$P_RULE" = "1" ] && echo true || echo false)" \
-		--argjson p_route "$([ "$P_ROUTE" = "1" ] && echo true || echo false)" \
-		--arg p_tun "$P_TUN" \
-		--argjson p_tun_up "$([ "$P_TUN_UP" = "1" ] && echo true || echo false)" \
-		--argjson p_clients "$CLIENTS" \
-		'{running: $running, pid: $pid, memory: $memory, core_installed: $core_installed,
-		  core_version: $core_version, panel_version: $panel_version, autostart: $autostart,
-		  config_exists: $config_exists, dashboard_installed: $dashboard_installed,
-		  compact: $compact, api_port: $api_port, api_secret: $api_secret, arch: $arch,
-		  policy: {name: $p_name, found: $p_found, mark: $p_mark, table: $p_table,
-		           rule_ok: $p_rule, route_ok: $p_route, tun: $p_tun, tun_up: $p_tun_up,
-		           clients: $p_clients}}'
-	;;
+		--arg panel_version "$(cat "$VERSION_FILE" 2>/dev/null)" \
+		--argjson autostart "$_auto" \
+		--argjson config_exists "$_cex" \
+		--argjson dashboard_installed "$(bool $_dash)" \
+		--argjson compact "$(bool $_cmp)" \
+		--arg api_port "${_port:-9090}" \
+		--arg api_secret "$_sec" \
+		--argjson api_open "$_open" \
+		--arg arch "$(cached_arch)" \
+		'. as $s
+		| (if $watchdog then ($s.state // "starting") else "down" end) as $state
+		| {ok: true,
+		   watchdog: {running: $watchdog, state: $state},
+		   state: $state,
+		   warnings: (($s.warnings // []) + (if $api_open then ["API mihomo открыт без пароля (secret): любой сайт в браузере может переключать прокси. Нажмите «Защитить API паролем»"] else [] end)),
+		   running: ($s.core.running // false), pid: ($s.core.pid // ""), memory: ($s.core.memory_kb // ""),
+		   core_error: ($s.core.error // ""), core_error_log: ($s.core.error_log // ""),
+		   enabled: ($s.core.enabled // true), paused: ($s.paused // false),
+		   core_installed: $core_installed, core_version: $core_version, panel_version: $panel_version,
+		   autostart: $autostart, config_exists: $config_exists, dashboard_installed: $dashboard_installed,
+		   compact: $compact, api_port: $api_port, api_secret: $api_secret, api_open: $api_open, arch: $arch,
+		   policy: {name: ($s.policy.name // ""), found: ($s.policy.found // false), mark: ($s.policy.mark // ""),
+		            rci: ($s.policy.rci // ""), table: "1001",
+		            rule_ok: ($s.routing.rules_ok // false), route_ok: ($s.routing.tun_up // false),
+		            tun: ($s.routing.tun // ""), tun_up: ($s.routing.tun_up // false),
+		            hosts: ($s.policy.hosts // []),
+		            clients: [($s.policy.hosts // [])[] | .name + (if .type == "gaming" then " (игровое)" else "" end)]}}'
+}
 
-service)
-	ACTION="$(jq_body '.params.action // empty')"
-	case "$ACTION" in
+m_service() {
+	case "$(jq_body '.params.action // empty')" in
 	start)
-		"$INIT_MIHOMO" start force >/dev/null 2>&1
-		jq -n '{ok: true}'
+		rm -f "$GRKA_RUN/hold"
+		{ state_set enabled true && flag_set dirty && ok_msg "Ядро запускается"; } || err "Не удалось сохранить"
 		;;
-	stop | restart)
-		"$INIT_MIHOMO" "$ACTION" >/dev/null 2>&1
-		jq -n '{ok: true}'
+	stop)
+		{ state_set enabled false && flag_set dirty && ok_msg "Ядро останавливается"; } || err "Не удалось сохранить"
+		;;
+	restart)
+		flag_set restart-core
+		flag_set dirty
+		ok_msg "Ядро перезапускается"
 		;;
 	enable)
-		sed -i 's/^ENABLED=.*/ENABLED=yes/' "$INIT_MIHOMO" 2>/dev/null
-		jq -n '{ok: true}'
+		{ settings_set autostart true && ok_msg "Автозапуск включён"; } || err "Не удалось сохранить"
 		;;
 	disable)
-		sed -i 's/^ENABLED=.*/ENABLED=no/' "$INIT_MIHOMO" 2>/dev/null
-		jq -n '{ok: true}'
+		{ settings_set autostart false && ok_msg "Автозапуск выключен"; } || err "Не удалось сохранить"
 		;;
-	*)
-		jq -n '{ok: false, error: "Недопустимое действие"}'
-		;;
+	*) err "Недопустимое действие" ;;
 	esac
-	;;
+}
 
-get_config)
-	if [ -f "$CONFIG_FILE" ]; then
-		jq -Rs '{exists: true, content: .}' < "$CONFIG_FILE"
+m_pause() {
+	{ state_set paused true && journal info "VPN поставлен на паузу" && flag_set dirty && ok_msg "VPN на паузе"; } || err "Не удалось сохранить"
+}
+
+m_resume() {
+	{ state_set paused false && journal info "Пауза снята" && flag_set dirty && ok_msg "Пауза снята"; } || err "Не удалось сохранить"
+}
+
+m_get_config() {
+	_cfg="$(core_config)"
+	if [ -f "$_cfg" ]; then
+		jqc -Rs '{ok: true, exists: true, content: .}' < "$_cfg"
 	else
-		jq -n '{exists: false, content: ""}'
+		jqc -n '{ok: true, exists: false, content: ""}'
 	fi
-	;;
+}
 
-set_config)
-	mkdir -p "$MIHOMO_DIR"
+m_set_config() {
+	_cfg="$(core_config)"
+	_force="$(jq_body '.params.force // false')"
+	_tmp="$GRKA_RUN/config.check.yaml"
+	jq_body '.params.content // ""' > "$_tmp"
+	if [ ! -s "$_tmp" ]; then
+		rm -f "$_tmp"
+		err "Пустой конфиг не сохранён"
+		return
+	fi
+	_out="$(core_validate "$_tmp")"
+	_rc=$?
+	if [ $_rc -ne 0 ] && [ $_rc -ne 3 ] && [ "$_force" != true ]; then
+		rm -f "$_tmp"
+		printf '%s' "$_out" | jqc -Rs '{ok: false, error: "Конфиг не прошёл проверку, не сохранено", output: .}'
+		return
+	fi
+	mkdir -p "$(dirname "$_cfg")"
 	make_backup
-	jq_body '.params.content // ""' > "$CONFIG_FILE"
-	jq -n '{ok: true}'
-	;;
+	mv -f "$_tmp" "$_cfg"
+	_warn=""
+	[ $_rc -ne 3 ] || _warn="Ядро не установлено, конфиг сохранён без проверки"
+	jqc -n --arg w "$_warn" '{ok: true, warning: $w}'
+}
 
-check_config)
-	CONTENT="$(jq_body '.params.content // ""')"
-	TARGET="$CONFIG_FILE"
-	if [ -n "$CONTENT" ]; then
-		TARGET="/opt/tmp/grka-check.yaml"
-		mkdir -p /opt/tmp
-		printf '%s\n' "$CONTENT" > "$TARGET"
+m_check_config() {
+	_content="$(jq_body '.params.content // ""')"
+	_target="$(core_config)"
+	if [ -n "$_content" ]; then
+		_target="$GRKA_RUN/config.check.yaml"
+		printf '%s\n' "$_content" > "$_target"
 	fi
-	BIN="$(ensure_core)"
-	if [ -z "$BIN" ]; then
-		RC=1
-		OUT="Ядро mihomo не установлено — установите его на вкладке «Статус»"
-	else
-		OUT="$("$BIN" -t -d "$MIHOMO_DIR" -f "$TARGET" 2>&1)"
-		RC=$?
-	fi
-	rm -f /opt/tmp/grka-check.yaml
-	printf '%s' "$OUT" | jq -Rs --argjson ok "$(bool $RC)" '{ok: $ok, output: .}'
-	;;
+	_out="$(core_validate "$_target")"
+	_rc=$?
+	rm -f "$GRKA_RUN/config.check.yaml"
+	printf '%s' "$_out" | jqc -Rs --argjson ok "$(bool $_rc)" '{ok: $ok, output: .}'
+}
 
-get_log)
-	LINES="$(jq_body '.params.lines // 200')"
-	case "$LINES" in *[!0-9]*|"") LINES=200 ;; esac
-	tail -n "$LINES" "$LOG_FILE" 2>/dev/null | jq -Rs '{log: .}'
-	;;
+m_get_log() {
+	_n="$(jq_body '.params.lines // 200')"
+	case "$_n" in "" | *[!0-9]*) _n=200 ;; esac
+	case "$(jq_body '.params.source // "core"')" in
+	journal) tail -n "$_n" "$JOURNAL_FILE" 2>/dev/null | jqc -Rs '{ok: true, log: .}' ;;
+	*) tail -n "$_n" "$CORE_LOG" 2>/dev/null | jqc -Rs '{ok: true, log: .}' ;;
+	esac
+}
 
-list_backups)
+m_journal() {
+	_n="$(jq_body '.params.lines // 100')"
+	case "$_n" in "" | *[!0-9]*) _n=100 ;; esac
+	tail -n "$_n" "$JOURNAL_FILE" 2>/dev/null | jqc -Rs '{ok: true, entries: (split("\n") | map(select(. != "") | split("|") | {time: .[0], level: .[1], message: (.[2:] | join("|"))}) | reverse)}'
+}
+
+m_list_backups() {
 	if [ -d "$BACKUP_DIR" ]; then
-		ls -1t "$BACKUP_DIR"/config-*.yaml 2>/dev/null | sed 's|.*/||' | jq -Rn '{backups: [inputs]}'
+		ls -1t "$BACKUP_DIR"/config-*.yaml 2>/dev/null | sed 's|.*/||' | jqc -Rn '{ok: true, backups: [inputs]}'
 	else
-		jq -n '{backups: []}'
+		jqc -n '{ok: true, backups: []}'
 	fi
-	;;
+}
 
-restore_backup)
-	NAME="$(jq_body '.params.name // empty')"
-	NAME="${NAME##*/}"
-	if [ -n "$NAME" ] && [ -f "$BACKUP_DIR/$NAME" ]; then
+m_restore_backup() {
+	_name="$(jq_body '.params.name // empty')"
+	_name="${_name##*/}"
+	if [ -n "$_name" ] && [ -f "$BACKUP_DIR/$_name" ]; then
 		make_backup
-		cp "$BACKUP_DIR/$NAME" "$CONFIG_FILE"
-		jq -n '{ok: true}'
+		cp "$BACKUP_DIR/$_name" "$(core_config)"
+		ok_msg "Бэкап восстановлен"
 	else
-		jq -n '{ok: false, error: "Бэкап не найден"}'
+		err "Бэкап не найден"
 	fi
-	;;
+}
 
-check_updates)
-	CORE_LATEST="$(latest_tag "$MIHOMO_REPO")"
-	PANEL_LATEST="$(latest_tag "$GRKA_REPO")"
-	jq -n \
+m_check_updates() {
+	jqc -n \
 		--arg core_current "$(core_version)" \
-		--arg core_latest "$CORE_LATEST" \
-		--arg panel_current "$(panel_version)" \
-		--arg panel_latest "${PANEL_LATEST#v}" \
-		'{core_current: $core_current, core_latest: $core_latest,
+		--arg core_latest "$(latest_tag "$MIHOMO_REPO")" \
+		--arg panel_current "$(cat "$VERSION_FILE" 2>/dev/null)" \
+		--arg panel_latest "$(latest_tag "$GRKA_REPO" | sed 's/^v//')" \
+		'{ok: true, core_current: $core_current, core_latest: $core_latest,
 		  panel_current: $panel_current, panel_latest: $panel_latest}'
-	;;
+}
 
-update_core)
-	VERSION="$(jq_body '.params.version // empty')"
-	run_task "$SCRIPTS/core-update.sh" "$VERSION"
-	;;
+m_update_core() {
+	_v="$(jq_body '.params.version // empty')"
+	case "$_v" in "" | v[0-9]*) ;; *) err "Неверная версия"; return ;; esac
+	case "$_v" in *[!0-9A-Za-z.-]*) err "Неверная версия"; return ;; esac
+	run_task "$SCRIPTS/core-update.sh" "$_v"
+}
 
-update_panel)
-	run_task "$SCRIPTS/self-update.sh"
-	;;
-
-install_dashboard)
-	run_task "$SCRIPTS/dashboard-install.sh"
-	;;
-
-set_compact)
-	ENABLED_ARG="$(jq_body '.params.enabled // empty')"
-	if [ "$ENABLED_ARG" = "1" ] || [ "$ENABLED_ARG" = "true" ]; then
+m_set_compact() {
+	_en="$(jq_body '.params.enabled // empty')"
+	if [ "$_en" = 1 ] || [ "$_en" = true ]; then
 		run_task "$SCRIPTS/compact-toggle.sh" on
 	else
 		run_task "$SCRIPTS/compact-toggle.sh" off
 	fi
-	;;
+}
 
-list_templates)
+m_list_templates() {
 	{
-		for f in "$TEMPLATE_DIR"/*.yaml; do
-			[ -f "$f" ] || continue
-			ID="${f##*/}"
-			ID="${ID%.yaml}"
-			TITLE="$(sed -n '1s/^#[[:space:]]*title:[[:space:]]*//p' "$f")"
-			jq -n --arg id "$ID" --arg title "${TITLE:-$ID}" '{id: $id, title: $title}'
+		for _f in "$TEMPLATE_DIR"/*.yaml; do
+			[ -f "$_f" ] || continue
+			_id="${_f##*/}"
+			_id="${_id%.yaml}"
+			_title="$(sed -n '1s/^#[[:space:]]*title:[[:space:]]*//p' "$_f")"
+			jqc -n --arg id "$_id" --arg title "${_title:-$_id}" '{id: $id, title: $title}'
 		done
-	} | jq -s '{templates: .}'
-	;;
+	} | jqc -s '{ok: true, templates: .}'
+}
 
-get_template)
-	TID="$(jq_body '.params.id // empty')"
-	TID="${TID##*/}"
-	if [ -n "$TID" ] && [ -f "$TEMPLATE_DIR/$TID.yaml" ]; then
-		jq -Rs '{ok: true, content: .}' < "$TEMPLATE_DIR/$TID.yaml"
+m_get_template() {
+	_tid="$(jq_body '.params.id // empty')"
+	_tid="${_tid##*/}"
+	if [ -n "$_tid" ] && [ -f "$TEMPLATE_DIR/$_tid.yaml" ]; then
+		jqc -Rs '{ok: true, content: .}' < "$TEMPLATE_DIR/$_tid.yaml"
 	else
-		jq -n '{ok: false, error: "Шаблон не найден"}'
+		err "Шаблон не найден"
 	fi
-	;;
+}
 
-task_status)
-	task_running; TR=$?
-	tail -c 16384 "$TASK_LOG" 2>/dev/null | jq -Rs --argjson running "$(bool $TR)" '{running: $running, log: .}'
-	;;
+m_task_status() {
+	task_running
+	_tr=$?
+	tail -c 16384 "$TASK_LOG" 2>/dev/null | jqc -Rs --argjson running "$(bool $_tr)" '{ok: true, running: $running, log: .}'
+}
 
-policy_apply)
-	OUT="$(sh "$SCRIPTS/policy-route.sh" apply 2>&1)"
-	RC=$?
-	printf '%s' "$OUT" | jq -Rs --argjson ok "$(bool $RC)" '{ok: $ok, output: .}'
-	;;
+m_policy_apply() {
+	flag_set rci-refresh
+	flag_set dirty
+	jqc -n '{ok: true, output: "Сторож применит правила в течение секунды"}'
+}
 
-set_policy)
-	NAME="$(jq_body '.params.name // empty' | tr -d "'\\\\\"" | head -c 64)"
-	if [ -z "$NAME" ]; then
-		jq -n '{ok: false, error: "Пустое имя политики"}'
+m_set_policy() {
+	_nm="$(jq_body '.params.name // empty')"
+	if ! policy_name_valid "$_nm"; then
+		err "Имя политики: от 1 до 64 символов, без служебных символов"
+		return
+	fi
+	settings_set policy_name "$(json_str "$_nm")" || { err "Не удалось сохранить"; return; }
+	flag_set rci-refresh
+	flag_set dirty
+	jqc -n --arg n "$_nm" '{ok: true, name: $n}'
+}
+
+m_settings_get() {
+	jqc '{ok: true, settings: (. + {has_token: ((.rci_token // "") != "")} | del(.rci_token, .password_hash))}' "$SETTINGS_FILE"
+}
+
+m_settings_set() {
+	_p="$(printf '%s' "$BODY" | jqc -c '.params // {}')"
+	_errs="$(printf '%s' "$_p" | jqc -r '
+		[ (if has("policy_name") then (.policy_name | if type == "string" and length >= 1 and length <= 64 and (explode | all(. >= 32 and . != 127)) then empty else "Имя политики: от 1 до 64 символов" end) else empty end),
+		  (if has("rci_token") then (.rci_token | if type == "string" and length <= 512 and test("\\A[A-Za-z0-9._~+/=-]*\\z") then empty else "Токен RCI: только латиница, цифры и символы ._~+/=-" end) else empty end),
+		  (if has("panel_port") then (.panel_port | if type == "number" and . == floor and . >= 1024 and . <= 65535 then empty else "Порт панели: число от 1024 до 65535" end) else empty end),
+		  (if has("autostart") then (.autostart | if type == "boolean" then empty else "Автозапуск: да или нет" end) else empty end),
+		  (if has("ipv6_block") then (.ipv6_block | if type == "boolean" then empty else "Блокировка IPv6: да или нет" end) else empty end)
+		] | join("; ")')"
+	if [ -n "$_errs" ]; then
+		err "$_errs"
+		return
+	fi
+	lock_acquire config || { sleep 1; lock_acquire config; } || { err "Настройки заняты, повторите"; return; }
+	jqc --argjson p "$_p" '. + ($p | with_entries(select(.key | IN("policy_name", "rci_token", "panel_port", "autostart", "ipv6_block"))))' "$SETTINGS_FILE" | write_atomic "$SETTINGS_FILE"
+	_r=$?
+	lock_release config
+	if [ $_r -ne 0 ]; then
+		err "Не удалось сохранить настройки"
+		return
+	fi
+	flag_set rci-refresh
+	flag_set dirty
+	_restart=false
+	if printf '%s' "$_p" | jqc -e 'has("panel_port")' >/dev/null 2>&1; then _restart=true; fi
+	jqc -n --argjson r "$_restart" '{ok: true, panel_restart_needed: $r}'
+}
+
+m_devices_get() {
+	_h="$(cat "$HOSTS_FILE" 2>/dev/null)"
+	[ -n "$_h" ] || _h='[]'
+	jqc -n --argjson h "$_h" --slurpfile st "$STATE_FILE" '{ok: true, devices: [$h[] | . + {type: ($st[0].devices[.mac].type // "regular")}]}'
+}
+
+m_devices_set_type() {
+	_mac="$(jq_body '.params.mac // empty')"
+	_type="$(jq_body '.params.type // empty')"
+	case "$_type" in
+	gaming | regular) ;;
+	*)
+		err "Тип устройства: gaming или regular"
+		return
+		;;
+	esac
+	if ! state_set_device "$_mac" "$_type"; then
+		err "Неверный MAC-адрес"
+		return
+	fi
+	flag_set dirty
+	ok_msg "Сохранено"
+}
+
+# Случайный secret в своём конфиге mihomo: закрывает Clash API от чужих сайтов
+m_secure_api() {
+	_cfg="$(core_config)"
+	if [ ! -f "$_cfg" ]; then
+		err "Конфиг не найден"
+		return
+	fi
+	_s="$(head -c 32 /dev/urandom | md5sum | cut -c1-24)"
+	make_backup
+	if grep -q '^secret:' "$_cfg"; then
+		sed -i "s/^secret:.*/secret: '$_s'/" "$_cfg"
 	else
-		mkdir -p /opt/etc/grka
-		if [ -f "$GRKA_CONF" ] && grep -q '^POLICY_NAME=' "$GRKA_CONF" 2>/dev/null; then
-			sed -i "s/^POLICY_NAME=.*/POLICY_NAME='$NAME'/" "$GRKA_CONF"
-		else
-			printf "POLICY_NAME='%s'\n" "$NAME" >> "$GRKA_CONF"
-		fi
-		# переприменяем маршрутизацию под новое имя
-		sh "$SCRIPTS/policy-route.sh" clear >/dev/null 2>&1
-		pidof mihomo >/dev/null 2>&1 && sh "$SCRIPTS/policy-route.sh" apply >/dev/null 2>&1
-		jq -n --arg name "$NAME" '{ok: true, name: $name}'
+		printf "\nsecret: '%s'\n" "$_s" >> "$_cfg"
 	fi
-	;;
+	flag_set restart-core
+	flag_set dirty
+	ok_msg "API защищён паролем, ядро перезапускается"
+}
 
-*)
-	jq -n --arg m "$METHOD" '{error: ("Неизвестный метод: " + $m)}'
-	;;
+case "$METHOD" in
+status) m_status ;;
+service) m_service ;;
+service.pause) m_pause ;;
+service.resume) m_resume ;;
+get_config) m_get_config ;;
+set_config) m_set_config ;;
+check_config) m_check_config ;;
+get_log) m_get_log ;;
+journal) m_journal ;;
+list_backups) m_list_backups ;;
+restore_backup) m_restore_backup ;;
+check_updates) m_check_updates ;;
+update_core) m_update_core ;;
+update_panel) run_task "$SCRIPTS/self-update.sh" ;;
+install_dashboard) run_task "$SCRIPTS/dashboard-install.sh" ;;
+set_compact) m_set_compact ;;
+list_templates) m_list_templates ;;
+get_template) m_get_template ;;
+task_status) m_task_status ;;
+policy_apply) m_policy_apply ;;
+set_policy) m_set_policy ;;
+settings.get) m_settings_get ;;
+settings.set) m_settings_set ;;
+devices.get) m_devices_get ;;
+devices.set_type) m_devices_set_type ;;
+expert.secure_api) m_secure_api ;;
+*) jqc -n --arg m "$METHOD" '{ok: false, error: ("Неизвестный метод: " + $m)}' ;;
 esac
