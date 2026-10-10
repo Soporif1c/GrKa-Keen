@@ -82,6 +82,19 @@ test_core_find_pid_in_proc() {
 	assert_eq 1234 "$(core_find_pid)"
 }
 
+test_core_running_scan_does_not_fork_per_process() {
+	_i=100
+	while [ $_i -lt 130 ]; do
+		mkdir -p "$GRKA_PROC/$_i"
+		printf '/opt/sbin/dropbear\000-p\00022\000' > "$GRKA_PROC/$_i/cmdline"
+		_i=$((_i + 1))
+	done
+	tr() { echo x >> "$T/tr.calls"; command tr "$@"; }
+	core_running
+	assert_eq 1 "$?" "ядра нет среди процессов"
+	assert_file_missing "$T/tr.calls" "без кандидатов tr не запускается ни разу (на роутере сотни процессов)"
+}
+
 test_core_validate_reports_not_installed() {
 	ensure_core() { echo ""; }
 	_o="$(core_validate x.yaml)"

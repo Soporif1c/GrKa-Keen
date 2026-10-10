@@ -74,10 +74,10 @@ core_pid() {
 	cat "$CORE_PIDFILE" 2>/dev/null
 }
 
-# PID нашего mihomo по /proc: командная строка содержит "mihomo" и "-d $MIHOMO_DIR"
+# PID нашего mihomo по /proc: командная строка содержит "mihomo" и "-d $MIHOMO_DIR".
+# Кандидатов отбирает один grep: tr на каждый из сотен процессов роутера слишком дорог для прохода раз в 10 секунд
 core_find_pid() {
-	for _cf in "$GRKA_PROC"/[0-9]*/cmdline; do
-		[ -f "$_cf" ] || continue
+	for _cf in $(grep -l -F -- "$MIHOMO_DIR" "$GRKA_PROC"/[0-9]*/cmdline 2>/dev/null); do
 		_ct="$(tr '\000' ' ' < "$_cf" 2>/dev/null)"
 		case "$_ct" in
 		*mihomo*" -d $MIHOMO_DIR "* | *mihomo*" -d $MIHOMO_DIR")
